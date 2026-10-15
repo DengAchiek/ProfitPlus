@@ -1,0 +1,101 @@
+{
+  "checkCount": 14,
+  "results": [
+    {
+      "name": "Default quote arithmetic",
+      "actual": {
+        "revenue": 15000,
+        "cost": 9450,
+        "profit": 5550,
+        "margin": 37,
+        "recommended": 125.67567567567568
+      },
+      "expected": {
+        "revenue": 15000,
+        "cost": 9450,
+        "profit": 5550,
+        "margin": 37
+      }
+    },
+    {
+      "name": "Target plus fees of 100% is identified as unachievable",
+      "actual": null,
+      "expected": null
+    },
+    {
+      "name": "Failed persistence still reports quote saved",
+      "toast": "Quote saved",
+      "stored": null,
+      "inMemoryQuotes": 1
+    },
+    {
+      "name": "Minute refresh replaces the inbox DOM",
+      "draftRemoved": true
+    },
+    {
+      "name": "Concurrent tabs overwrite each other",
+      "storedNames": [
+        "Quote B"
+      ]
+    },
+    {
+      "name": "Malformed stored records can stop initialization",
+      "crashed": true,
+      "error": "Cannot read properties of null (reading 'qty')"
+    },
+    {
+      "name": "Demo records inflate operational totals without per-record labels",
+      "metricHTML": "<div>Unanswered<strong>3</strong></div><div>Waiting 24+ hours<strong>1</strong></div><div>Potential unanswered sales<strong>KSh 14,500</strong></div>",
+      "demoCount": 3,
+      "visibleDemoLabel": false
+    },
+    {
+      "name": "Received timestamp is not refreshed after entry",
+      "initial": "2026-10-14T18:07",
+      "after": "2026-10-14T18:07",
+      "unchanged": true
+    },
+    {
+      "name": "Backup accepts duplicate ids and an unknown schema version",
+      "accepted": true
+    },
+    {
+      "name": "Backup accepts future enquiry timestamps",
+      "accepted": true
+    },
+    {
+      "name": "Whitespace-only fields are saved as empty strings",
+      "job": "",
+      "customer": "",
+      "message": ""
+    },
+    {
+      "name": "Zero quantity produces an infinite live recommendation",
+      "recommendation": "KSh ∞"
+    },
+    {
+      "name": "Rounded suggested price can fall below target",
+      "exact": 1.3333333333333333,
+      "shown": 1.33,
+      "marginAtShown": 24.812030075187973,
+      "target": 25
+    },
+    {
+      "name": "Priority rules mishandle negation and miss a Swahili price enquiry",
+      "negatedBuy": {
+        "hours": 0,
+        "intent": true,
+        "urgent": true,
+        "high": true,
+        "overdue": false
+      },
+      "swahiliQuote": {
+        "hours": 0,
+        "intent": false,
+        "urgent": false,
+        "high": false,
+        "overdue": false
+      }
+    }
+  ]
+}
