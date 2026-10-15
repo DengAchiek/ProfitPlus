@@ -37,7 +37,13 @@ async function api(route, options = {}) {
     headers: { ...(options.body ? {'Content-Type':'application/json'} : {}), ...(model.csrf ? {'X-CSRF-Token':model.csrf} : {}) },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
-  const result = await response.json();
+  let result;
+  try { result = await response.json(); }
+  catch {
+    const error = Error('The workspace service is unavailable. Please try again shortly or contact the service operator.');
+    error.status = response.ok ? 503 : response.status;
+    throw error;
+  }
   if (!response.ok) { const error = Error(result.error || 'Request failed.'); error.status = response.status; throw error; }
   return result;
 }
@@ -417,11 +423,14 @@ async function loadBilling(){
 }
 function renderSettings() {
   const b=model.business, owner=!demo&&model.user?.role==='owner';
+  const cloudBackup=model.backupStatus?.mode==='cloudflare';
+  const backupDescription=cloudBackup?'Records are stored in persistent Cloudflare SQLite storage. Export workspace backups regularly and keep a separate copy. Cloudflare database recovery is managed by the service operator.':'Records are stored on your server. Verified database snapshots run on startup and hourly, retaining 14 daily snapshots. Copy backups off this computer for protection from disk failure.';
+  const backupMessage=model.backupStatus?.error?'Backup needs attention: '+model.backupStatus.error:cloudBackup?'Persistent cloud storage · Before-restore safety copies are saved with your workspace.':model.backupStatus?.lastSuccess?'Last verified backup: '+when(model.backupStatus.lastSuccess):'The first automatic backup is being prepared.';
   settingsRevision = b.revision;
   let html=heading('Your business, your workspace.','Manage business details, access, backups, and account security.');
   if(owner){
     html+='<div class="grid"><section class="card"><h2>Business & document details</h2><form id="settingsForm"><div id="settingsError" class="error" role="alert" hidden></div>'+field('name','Business name',b.name,'text','required maxlength="500"')+'<div class="pair">'+field('phone','Business phone',b.phone,'tel','maxlength="500"')+field('email','Business email',b.email,'email','maxlength="500"')+'</div>'+area('address','Business address',b.address,500)+field('taxId','Tax / registration ID',b.taxId,'text','maxlength="500"')+'<div class="pair">'+select('currency','Default currency',b.currency,currencyOptions(),true)+field('locale','Number & date locale',b.locale || 'en-US','text','required maxlength="50"')+field('timezone','Reporting timezone',b.timezone,'text','required maxlength="100"')+field('responseHours','Response target · hours',b.responseHours,'number','required min="1" max="720" step="1"')+'</div>'+area('terms','Default quotation terms',b.terms,3000)+'<button class="primary" type="submit">Save business settings</button></form></section>'+
-    '<section class="card"><h2>Backups & recovery</h2><p class="small">Records are stored on your server. Verified database snapshots run on startup and hourly, retaining 14 daily snapshots. Copy backups off this computer for protection from disk failure.</p><div class="section-note">'+(model.backupStatus?.error?'Backup needs attention: '+esc(model.backupStatus.error):model.backupStatus?.lastSuccess?'Last verified backup: '+when(model.backupStatus.lastSuccess):'The first automatic backup is being prepared.')+'</div><div class="actions">'+button('backup','↓ Export workspace backup','','','primary')+'</div><div class="form-section"><h3>Restore or migrate</h3><label>Choose a ProfitPulse JSON backup<input id="importFile" type="file" accept="application/json,.json"></label><p class="small">Version 2 or 3 restore replaces business records after a preview and confirmation. A safety copy is saved first. Version 1 imports append legacy records and omit synthetic examples. Maximum file size: 50 MB. Changing the default currency affects new records only. Accounts, passwords, and subscription entitlements are never included in portable exports.</p></div><div class="form-section"><h3>Before-restore safety copies</h3><div id="safetyList" class="small">Loading recovery copies…</div></div></section></div>'+
+    '<section class="card"><h2>Backups & recovery</h2><p class="small">'+esc(backupDescription)+'</p><div class="section-note">'+esc(backupMessage)+'</div><div class="actions">'+button('backup','↓ Export workspace backup','','','primary')+'</div><div class="form-section"><h3>Restore or migrate</h3><label>Choose a ProfitPulse JSON backup<input id="importFile" type="file" accept="application/json,.json"></label><p class="small">Version 2 or 3 restore replaces business records after a preview and confirmation. A safety copy is saved first. Version 1 imports append legacy records and omit synthetic examples. Maximum file size: '+esc(model.backupStatus?.maxImportMB || 50)+' MB. Changing the default currency affects new records only. Accounts, passwords, and subscription entitlements are never included in portable exports.</p></div><div class="form-section"><h3>Before-restore safety copies</h3><div id="safetyList" class="small">Loading recovery copies…</div></div></section></div>'+
     '<section class="card"><div class="card-head"><h2>Your team</h2><span class="small">Owners manage access & backups; staff manage business records.</span></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Access</th><th>Actions</th></tr></thead><tbody>'+model.users.map(u=>'<tr><td>'+esc(u.name)+'</td><td>'+esc(u.email)+'</td><td>'+esc(u.role)+'</td><td>'+ (u.active?'Active':'Disabled')+'</td><td><div class="actions">'+button('toggleUser',u.active?'Disable access':'Enable access',u.id)+button('changeRole',u.role==='owner'?'Make staff':'Make owner',u.id)+'</div></td></tr>').join('')+'</tbody></table></div><div class="form-section"><h3>Add a team account</h3><form id="teamForm"><div id="teamError" class="error" role="alert" hidden></div><div class="pair">'+field('name','Name','','text','required maxlength="100"')+field('email','Email','','email','required maxlength="254"')+field('password','Initial password','','password','required minlength="12" maxlength="256" autocomplete="new-password"')+select('role','Permission','staff',['staff','owner'],true)+'</div><p class="small">Share the initial password privately. The team member can change it from their own account settings.</p><button class="primary" type="submit">Create team account</button></form></div></section>';
   }else html+='<section class="card"><h2>Business workspace</h2><p>'+esc(b.name)+'</p><p class="small">'+(demo?'Demo records are synthetic and read only.':'Ask an owner to update business settings, manage team access, or restore a backup.')+'</p></section>';
   if(!demo)html+='<section class="card"><h2>Your account</h2><p class="small">'+esc(model.user.name)+' · '+esc(model.user.email)+' · '+esc(model.user.role)+'</p><form id="passwordForm"><div id="passwordError" class="error" role="alert" hidden></div><div class="pair">'+field('currentPassword','Current password','','password','required autocomplete="current-password"')+field('newPassword','New password','','password','required minlength="12" maxlength="256" autocomplete="new-password"')+'</div><p class="small">Changing your password signs out your existing sessions.</p><button type="submit">Change password</button></form></section>';
@@ -444,7 +453,7 @@ async function previewImport(file,raw){
   ensureWritable();
   let backup;
   if(raw!==undefined){try{backup=JSON.parse(raw);}catch{throw Error('The original browser records are malformed. Download the original data before attempting recovery.');}}
-  else{if(!file)return;if(file.size>50*1024*1024)throw Error('Choose a JSON backup smaller than 50 MB.');try{backup=JSON.parse(await file.text());}catch{throw Error('This file is not valid JSON.');}}
+  else{if(!file)return;const maxMB=model.backupStatus?.maxImportMB || 50;if(file.size>maxMB*1024*1024)throw Error('Choose a JSON backup smaller than '+maxMB+' MB.');try{backup=JSON.parse(await file.text());}catch{throw Error('This file is not valid JSON.');}}
   const legacy=![2,3].includes(backup.schemaVersion);
   const revision=model.business.revision;
   const result=await api(legacy?'/legacy/preview':'/restore/preview',{method:'POST',body:{backup}});
@@ -489,7 +498,7 @@ function startDemo(){signedInModel=model.user?model:null;demo=true;model=demoMod
 async function exitDemo(){demo=false;openDraft=null;if(signedInModel){model=signedInModel;signedInModel=null;await refresh();}else{model={records:emptyRecords(),users:[],business:{timezone:'UTC',currency:'USD',locale:'en-US'}};showAuth(location.pathname==='/signup');}}
 async function signOut(){
   if(openDraft&&!confirm('Sign out? Unsaved reply drafts will remain on this device for your account.'))return;
-  await api('/logout',{method:'POST'});openDraft=null;demo=false;model={records:emptyRecords(),users:[],business:{timezone:'UTC',currency:'USD',locale:'en-US'}};showAuth(false);
+  await api('/logout',{method:'POST'});openDraft=null;demo=false;model={records:emptyRecords(),users:[],business:{timezone:'UTC',currency:'USD',locale:'en-US'}};history.replaceState(null,'','/login');showAuth(false);
 }
 async function showHistory(kind,id){
   const rows=demo?[]:await api('/records/'+kind+'/'+id+'/history');
@@ -557,7 +566,13 @@ setInterval(async()=>{
 },30000);
 async function boot(){
   const requested=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing'].includes(requested))currentView=requested;
-  try{const status=await api('/status');needsSetup=location.pathname==='/signup';if(new URLSearchParams(location.search).get('demo')==='1'){startDemo();return;}try{await refresh();}catch(error){if(error.status!==401)throw error;showAuth(location.pathname==='/signup');}}
-  catch(error){showAuth(false,'Cannot reach the server. Start ProfitPulse with npm start and refresh this page. '+error.message);}
+  needsSetup=location.pathname==='/signup';
+  if(new URLSearchParams(location.search).get('demo')==='1'){startDemo();return;}
+  try{
+    await refresh();
+    if(location.pathname!=='/app')history.replaceState(null,'','/app'+location.hash);
+  }catch(error){
+    showAuth(needsSetup,error.status===401?'':error.status?'The workspace service is unavailable. Please try again shortly or contact the service operator.':'Unable to connect. Check your connection and try again.');
+  }
 }
 boot();

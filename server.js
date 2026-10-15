@@ -7,16 +7,18 @@ const D = require('./dist/logic');
 const { Billing } = require('./lib/billing');
 const { documentPdf } = require('./lib/pdf');
 const LIMIT = 50 * 1024 * 1024;
+const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/app.js': 'app.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
 
 function createApplication(options = {}) {
-  const store = new Store(options.dataDir || process.env.DATA_DIR || path.join(__dirname, 'data'));
+  const backupLimit = options.backupLimit || LIMIT;
+  const store = options.store || new Store(options.dataDir || process.env.DATA_DIR || path.join(__dirname, 'data'));
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const publicOrigin = options.publicOrigin || process.env.PUBLIC_ORIGIN;
   const logger = options.logger || console;
   if(publicOrigin){const parsed=new URL(publicOrigin);if(parsed.origin!==publicOrigin||!['https:','http:'].includes(parsed.protocol))throw Error('PUBLIC_ORIGIN must be an exact HTTP(S) origin without a path or trailing slash.');}
   if (production && (!publicOrigin || !publicOrigin.startsWith('https://'))) throw Error('Set PUBLIC_ORIGIN to the HTTPS address of this deployment.');
   const billing = new Billing(store,{...options.billing,publicOrigin});
-  const attempts = new Map();
+  const attempts = options.attempts || new Map();
   const securityHeaders = {
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY',
     'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
@@ -32,7 +34,7 @@ function createApplication(options = {}) {
     if (!String(req.headers['content-type'] || '').startsWith('application/json')) throw new AppError(415, 'Use application/json.');
     const chunks = [];
     let size = 0;
-    for await (const chunk of req) { size += chunk.length; if (size > limit) throw new AppError(413, 'Request is too large. Backup limit is 50 MB.'); chunks.push(chunk); }
+    for await (const chunk of req) { size += chunk.length; if (size > limit) throw new AppError(413, 'Request is too large. Maximum size is ' + (limit >= 1024 * 1024 ? limit / (1024 * 1024) + ' MB.' : Math.floor(limit / 1024) + ' KB.')); chunks.push(chunk); }
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new AppError(400, 'Invalid JSON.'); }
   }
   function guardOrigin(req) {
@@ -46,17 +48,18 @@ function createApplication(options = {}) {
     if (!['GET', 'HEAD'].includes(req.method) && req.headers['x-csrf-token'] !== user.csrf) throw new AppError(403, 'Session verification failed. Refresh and try again.');
     return { user, token };
   }
-  const server = http.createServer(async (req, res) => {
+  const handleRequest = async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
       const route = url.pathname;
       if (!route.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(req.method)) return json(res, 405, { error: 'Method not allowed.' });
-        const files = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/app.js': 'app.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
+        const files = STATIC_FILES;
         if (!files[route]) return json(res, 404, { error: 'Not found.' });
         const file = files[route], type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
+        const bytes = req.method === 'HEAD' ? '' : fs.readFileSync(path.join(__dirname, 'dist', file));
         res.writeHead(200, { ...securityHeaders, 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-cache' });
-        return res.end(req.method === 'HEAD' ? '' : fs.readFileSync(path.join(__dirname, 'dist', file)));
+        return res.end(bytes);
       }
       if(route==='/api/billing/webhook' && req.method==='POST'){
         const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1000000)throw new AppError(413,'Webhook too large.');chunks.push(chunk);}
@@ -91,27 +94,19 @@ function createApplication(options = {}) {
       if (/^\/api\/users\/[^/]+$/.test(route) && req.method === 'PUT') return json(res, 200, store.updateUser(user, route.split('/')[3], await body(req)));
       if (route === '/api/backup' && req.method === 'GET') {
         const bytes = Buffer.from(JSON.stringify(store.export(user), null, 2));
-        if (bytes.length > LIMIT) throw new AppError(422, 'Workspace exceeds the portable backup limit. Use a verified server database backup.');
+        if (bytes.length > backupLimit) throw new AppError(422, 'Workspace exceeds the portable backup limit. Contact the service operator for database recovery.');
         res.writeHead(200, { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="profitpulse-' + new Date().toISOString().slice(0, 10) + '.json"' });
         return res.end(bytes);
       }
       if (route === '/api/backups' && req.method === 'GET') {
-        store.owner(user);
-        const backups = fs.readdirSync(store.backupDir).filter(name => /^before-restore-[\w-]+\.json$/.test(name)).filter(name => {
-          try { return JSON.parse(fs.readFileSync(path.join(store.backupDir, name))).business.id === user.business_id; } catch { return false; }
-        }).sort().reverse().slice(0, 20);
-        return json(res, 200, { backups });
+        return json(res, 200, { backups: store.listSafetyBackups(user) });
       }
       if (/^\/api\/backups\/before-restore-[\w-]+\.json$/.test(route) && req.method === 'GET') {
-        store.owner(user);
-        const name = route.split('/')[3], file = path.join(store.backupDir, name);
-        if (!fs.existsSync(file)) throw new AppError(404, 'Backup not found.');
-        const data = JSON.parse(fs.readFileSync(file));
-        if (data.business.id !== user.business_id) throw new AppError(404, 'Backup not found.');
+        const name = route.split('/')[3], data = store.readSafetyBackup(user, name);
         return json(res, 200, data, { 'Content-Disposition': 'attachment; filename="' + name + '"' });
       }
       if (['/api/restore/preview', '/api/restore', '/api/legacy/preview', '/api/legacy'].includes(route) && req.method === 'POST') {
-        const input = await body(req, LIMIT);
+        const input = await body(req, backupLimit);
         let result;
         if (route.startsWith('/api/legacy')) {
           if (route.endsWith('/preview')) result = store.legacy(user, input.backup, true);
@@ -126,7 +121,7 @@ function createApplication(options = {}) {
         if (action === 'pdf' && ['quotes', 'invoices'].includes(kind) && req.method === 'GET') {
           const record = store.get(user, kind, id), customer = store.get(user, 'customers', record.customerId);
           const summary = kind === 'invoices' ? D.invoiceSummary(record, store.list(user, 'payments'), store.list(user, 'expenses')) : null;
-          const bytes = await documentPdf(store.business(user), customer, record, kind, summary);
+          const bytes = await documentPdf(store.business(user), customer, record, kind, summary, options.pdfFonts);
           res.writeHead(200, { ...securityHeaders, 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + record.number.replace(/[^\w-]/g, '_') + '.pdf"' });
           return res.end(bytes);
         }
@@ -141,10 +136,11 @@ function createApplication(options = {}) {
       if (!res.headersSent) json(res, status, { error: status === 500 ? 'The operation could not be saved. Your edits remain available. Please retry or contact the owner.' : error.message });
       else res.end();
     }
-  });
+  };
+  const server = http.createServer(handleRequest);
   let timer;
   if (options.startTimers !== false) { store.automaticBackup(); timer = setInterval(() => store.automaticBackup(), 60 * 60000); timer.unref(); }
-  return { server, store, billing, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
+  return { server, store, billing, handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
 }
 if (require.main === module) {
   const app = createApplication();
@@ -152,4 +148,4 @@ if (require.main === module) {
   app.server.listen(port, host, () => console.log('ProfitPulse is running at http://' + host + ':' + port));
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => app.close().then(() => process.exit(0)));
 }
-module.exports = { createApplication };
+module.exports = { createApplication, STATIC_FILES };

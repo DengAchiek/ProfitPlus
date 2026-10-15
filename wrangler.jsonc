@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "profitplus",
+  "main": "cloudflare/worker.mjs",
+  "compatibility_date": "2026-10-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  "vars": {
+    "PUBLIC_ORIGIN": "https://profitplus.cj5v2tzbtr.workers.dev"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "DATABASE", "class_name": "ProfitPulseDatabase" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ProfitPulseDatabase"] }
+  ],
+  "rules": [{ "type": "Data", "globs": ["**/*.woff"], "fallthrough": true }],
+  "observability": { "enabled": true }
+}

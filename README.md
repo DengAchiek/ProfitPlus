@@ -15,7 +15,30 @@ Open **http://127.0.0.1:8080** for the public landing page and plan comparison. 
 
 The sign-in screen also has a **read-only demo workspace**. Its synthetic data lives in memory and never enters the business database or reports.
 
-The application now needs **npm start** for authentication, records and PDFs. The old static-server instructions no longer apply. Original source is preserved under review/v1/.
+For the Node deployment, the application needs **npm start** for authentication, records and PDFs. Cloudflare uses the Worker described below. Uploading only `dist/` does not run the authentication or database APIs. Original source is preserved under review/v1/.
+
+## Cloudflare Workers deployment from GitHub
+
+The repository includes `wrangler.jsonc` and `cloudflare/worker.mjs` for **profitplus.cj5v2tzbtr.workers.dev**. The Worker serves the public landing page at `/`, the signup form at `/signup`, sign-in at `/login`, and the workspace at `/app`. It runs the shared server routes and business rules against persistent, SQLite-backed Durable Object storage. The database binding and initial migration are declared in Wrangler; no D1 database ID or external Node server is required.
+
+In the existing Cloudflare Worker’s **Settings → Builds**, connect this GitHub repository and production branch `main`, use the repository root, set the build command to `npm run build` and the deploy command to `npm run deploy`. Set build variable `NODE_VERSION=24`. The deployment must use the repository’s Wrangler configuration, including its `main`, asset binding, and database migration. A static-only deployment of `dist/` will show the login document at the root and return 404 for `/api/*`.
+
+`PUBLIC_ORIGIN` is set to the existing HTTPS address in `wrangler.jsonc`. Update it if the primary domain changes. Add Stripe keys and price mappings as Cloudflare runtime secrets/variables only when billing is configured; trials and account access work without them. This deployment creates its own persistent database. It does not upload the private local `data/` directory. Existing local workspace records can be migrated using an owner export and restore after creating the corresponding cloud workspace; local account passwords and sessions are not copied.
+
+For local Worker development and verification:
+
+~~~sh
+npm ci
+npm run dev:cloudflare
+npm run check
+npm test
+npm run test:cloudflare
+npm run build
+~~~
+
+Open **http://127.0.0.1:8787** for the Worker preview. Cloudflare runtime tests use isolated temporary databases and synthetic accounts; they check routing, signup/login, tenant isolation, staff permissions, CSRF/origin checks, PDF generation, restore safety copies, and persistence across runtime restarts. `npm run build` bundles the Worker without publishing. `npm run deploy` publishes to the authenticated Cloudflare account; GitHub-connected Cloudflare Builds performs that step automatically after a production-branch update.
+
+Cloudflare uses persistent storage and provider-managed database recovery rather than local hourly snapshot files. Owner exports and before-restore safety copies remain available. Portable cloud exports/imports are limited to **8 MB** to fit Worker memory limits; the Node deployment retains its 50 MB limit. Larger workspaces require operator-managed database recovery. Safety copies are stored in chunks to fit SQLite row limits. PDFKit is pinned to the compatible 0.17 series because 0.20’s module initialization assumes a filesystem-backed module URL.
 
 ## Implemented functionality
 
