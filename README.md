@@ -1,4 +1,4 @@
-# ProfitPulse — SaaS business workspace
+# ProfitPulse SaaS business workspace
 
 A server-backed small-business application connecting **customer → enquiry → quotation → invoice/order → payment → actual profit**. The interface remains plain HTML, CSS and JavaScript. The Node server stores validated records in SQLite; browser storage is used only for recovery of unsaved reply drafts and legacy migration.
 
