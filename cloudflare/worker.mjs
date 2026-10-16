@@ -29,6 +29,8 @@ export class ProfitPulseDatabase extends DurableObject {
       publicOrigin: env.PUBLIC_ORIGIN,
       production: new URL(env.PUBLIC_ORIGIN).protocol === 'https:',
       attempts: loginAttempts(this.store.db),
+      adminEmails: env.PLATFORM_ADMIN_EMAILS || '',
+      adminEmailHashes: env.PLATFORM_ADMIN_EMAIL_SHA256 || '',
       pdfFonts: { regular: Buffer.from(regularFont), bold: Buffer.from(boldFont) },
       billing: {
         stripe: env.STRIPE_SECRET_KEY ? new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2, timeout: 20000 }) : null,

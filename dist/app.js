@@ -10,6 +10,15 @@ const emptyRecords = () => Object.fromEntries(Pulse.kinds.map(k => [k, []]));
 let model = { records: emptyRecords(), users: [], business: { name: 'ProfitPulse', timezone: 'UTC', currency:'USD', locale:'en-US', responseHours: 24 }, activity: [] };
 let currentView = 'overview', demo = false, filters = { query: '', status: '', channel: '', from: '', to: '', archived: false, sort: 'updated' }, page = 1;
 let formContext = null, formDirty = false, inlineDirty = false, settingsRevision = null, openDraft = null, importContext = null, toastTimer;
+let usageTracker=null,usageUserId=null;
+function syncUsage(){
+  if(demo||!model.user){usageTracker?.stop();usageTracker=null;usageUserId=null;return;}
+  if(usageUserId!==model.user.id){
+    usageTracker?.stop();usageUserId=model.user.id;
+    usageTracker=PulseUsage.create({tabId:crypto.randomUUID(),visible:()=>document.visibilityState==='visible'&&document.hasFocus(),send:(body,keepalive)=>fetch('/api/telemetry',{method:'POST',credentials:'same-origin',keepalive,headers:{'Content-Type':'application/json','X-CSRF-Token':model.csrf},body:JSON.stringify(body)})});
+  }
+  usageTracker.module(currentView);
+}
 const pageSize = 10;
 const customer = id => model.records.customers.find(c => c.id === id) || { name: 'Customer unavailable' };
 const member = id => { const user=model.users.find(u => u.id === id); return user ? user.name+(user.active?'':' (inactive)') : 'Unassigned'; };
@@ -58,13 +67,13 @@ async function downloadServer(route, name) {
   a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
 }
 function ensureWritable() { if(demo)throw Error('This is a read-only demo. Sign in to create your own business records.');if(model.subscription&&!model.subscription.canWrite)throw Error('Your subscription needs attention. Open Billing to continue editing.'); }
-async function refresh(render = true) {
+async function refresh(render = true,reloadAdmin=false) {
   if (demo) { if (render) renderView(); return; }
   const previousRevision = model.business.revision;
   const data = await api('/bootstrap');
   model = data;
   $('connectionText').textContent = 'Connected · changes saved on server';
-  if (render && !$('editor').open && !openDraft && !inlineDirty) { notice(''); renderShell(); renderView(); }
+  if (render && !$('editor').open && !openDraft && !inlineDirty) { notice(''); renderShell(); if(currentView!=='admin'||!$('adminData'))renderView();else if(reloadAdmin)PlatformAdmin.reload(); }
   else if (previousRevision !== data.business.revision) notice('Workspace updates are available. Finish your current edit, then refresh.');
 }
 async function savedRefresh(record, kind) {
@@ -83,7 +92,11 @@ function heading(title, intro, action = '') { return '<div class="page-heading">
 function metric(label, value, note, primary = false, negative = false) { return '<div class="metric ' + (primary ? 'primary-metric ' : '') + (negative ? 'negative' : '') + '"><label>' + esc(label) + '</label><strong>' + esc(value) + '</strong><small>' + esc(note || '') + '</small></div>'; }
 function empty(title, description, action = '') { return '<div class="empty"><strong>' + title + '</strong><div>' + description + '</div>' + action + '</div>'; }
 function renderShell() {
+  if(currentView==='admin'&&(demo||!model.platformAdmin))currentView='overview';
   $('auth').hidden = true; $('workspace').hidden = false;
+  const adminButton=$('platformAdminNav');
+  if(!demo&&model.platformAdmin){if(!adminButton){const b=document.createElement('button');b.id='platformAdminNav';b.dataset.view='admin';b.innerHTML='<span>◉</span> Platform admin';b.onclick=()=>go('admin');$('navigation').append(b);}}
+  else adminButton?.remove();
   $('businessLabel').textContent = model.business.name; $('workspaceName').textContent = model.business.name;
   $('accountButton').textContent = (model.user?.name || 'Demo').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
   $('accountButton').title = (model.user?.name || 'Demo') + ' · ' + (model.user?.role || 'Read only');
@@ -95,8 +108,10 @@ function renderShell() {
   const sub=model.subscription; $('subscriptionBanner').hidden=demo||!sub||sub.status==='active';$('subscriptionMessage').textContent=sub?(sub.canWrite?sub.planName+' trial · '+sub.daysRemaining+' days remaining.': 'Subscription needs attention · Your records remain available to view and export.'):'';
   if (demo) $('connectionText').textContent = 'Read-only demo · synthetic records';
   try { $('legacyNotice').hidden = demo || model.user?.role !== 'owner' || !localStorage.getItem('profitpulse'); } catch { $('legacyNotice').hidden = true; }
+  syncUsage();
 }
 function go(view) {
+  if(view==='admin'&&(demo||!model.platformAdmin)){showToast('Platform administrator access is required.');return;}
   if (inlineDirty && !confirm('Leave this page and discard the unsaved settings or account form?')) { location.hash = currentView; return; }
   if (openDraft && !confirm('Leave this reply? Save or download it first if you need to keep unsaved changes.')) { location.hash = currentView; return; }
   currentView = view; filters = {query:'',status:'',channel:'',from:'',to:'',archived:false,sort:'updated',currency:model.business.currency || 'USD'}; page = 1; openDraft = null; inlineDirty = false; $('replyComposer').hidden = true;
@@ -196,11 +211,12 @@ function renderReports() {
     '<section class="card"><h2>Invoice detail</h2>' + (r.invoices.length ? invoiceTable(paginate(r.invoices))+pagination(r.invoices.length) : empty('No matching invoices.','Adjust the period or create your first invoice.')) + '</section><div class="report-definitions"><strong>How these numbers work.</strong> Monetary totals and quote acceptance use the selected currency. Exchange conversion is not applied.  Payment totals use payment dates and include tax; refunds subtract from receipts. Invoice sales and balances use invoice issue dates. Estimated profit excludes tax and uses entered costs plus expected fees. Actual profit excludes tax and appears only for completed orders with finalized costs; it uses recorded costs and actual payment fees. It is an order margin, not a cash balance. Quote acceptance uses recorded decisions. Archived quotes and invoices retain their financial history. Cancelled invoices are excluded from sales; archived payment and cost entries are excluded from calculations.</div>';
 }
 function renderView() {
-  const renderer = currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
+  const renderer = currentView === 'admin' ? PlatformAdmin.render : currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
   $('content').innerHTML = renderer();
   bindToolbar();
   if(currentView==='billing'&&!demo&&model.user?.role==='owner')loadBilling();
   if(currentView==='settings'&&!demo&&model.user?.role==='owner')loadSafetyCopies();
+  if(currentView==='admin')PlatformAdmin.mount();
   try{if(localStorage.getItem('profitpulse.migrated.'+model.business.id))$('legacyNotice').hidden=true;}catch{}
   if (demo) document.querySelectorAll('[data-action="new"],[data-action="edit"],[data-action="archive"],[data-action="restoreRecord"],[data-action="quoteFromLead"],[data-action="invoiceFromQuote"],[data-action="invoiceFromCustomer"],[data-action="draft"],[data-action="pdf"],[data-action="csv"]').forEach(b => b.disabled = true);
 }
@@ -455,6 +471,7 @@ function renderSettings() {
     '<section class="card"><div class="card-head"><h2>Your team</h2><span class="small">Owners manage access & backups; staff manage business records.</span></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Access</th><th>Actions</th></tr></thead><tbody>'+model.users.map(u=>'<tr><td>'+esc(u.name)+'</td><td>'+esc(u.email)+'</td><td>'+esc(u.role)+'</td><td>'+ (u.active?'Active':'Disabled')+'</td><td><div class="actions">'+button('toggleUser',u.active?'Disable access':'Enable access',u.id)+button('changeRole',u.role==='owner'?'Make staff':'Make owner',u.id)+'</div></td></tr>').join('')+'</tbody></table></div><div class="form-section"><h3>Add a team account</h3><form id="teamForm"><div id="teamError" class="error" role="alert" hidden></div><div class="pair">'+field('name','Name','','text','required maxlength="100"')+field('email','Email','','email','required maxlength="254"')+field('password','Initial password','','password','required minlength="12" maxlength="256" autocomplete="new-password"')+select('role','Permission','staff',['staff','owner'],true)+'</div><p class="small">Share the initial password privately. The team member can change it from their own account settings.</p><button class="primary" type="submit">Create team account</button></form></div></section>';
   }else html+='<section class="card"><h2>Business workspace</h2><p>'+esc(b.name)+'</p><p class="small">'+(demo?'Demo records are synthetic and read only.':'Ask an owner to update business settings, manage team access, or restore a backup.')+'</p></section>';
   if(!demo)html+='<section class="card"><h2>Your account</h2><p class="small">'+esc(model.user.name)+' · '+esc(model.user.email)+' · '+esc(model.user.role)+'</p><form id="passwordForm"><div id="passwordError" class="error" role="alert" hidden></div><div class="pair">'+field('currentPassword','Current password','','password','required autocomplete="current-password"')+field('newPassword','New password','','password','required minlength="12" maxlength="256" autocomplete="new-password"')+'</div><p class="small">Changing your password signs out your existing sessions.</p><button type="submit">Change password</button></form></section>';
+  if(!demo)html+='<section class="card"><h2>Platform usage</h2><p class="small">The platform administrator can see your account profile, approximate active time, services used and application performance. Active time counts visible, focused use and stops after 60 seconds without interaction. Daily usage summaries are retained for 90 days. No passwords, session tokens or business-record contents are included in usage analytics.</p></section>';
   html+='<section class="card"><h2>Change history</h2>'+(model.activity.length?model.activity.slice(0,30).map(a=>'<div class="timeline-row"><span class="timeline-dot"></span><div>'+esc(a.userName)+' '+esc(a.action)+' '+esc(a.kind)+'<small>'+when(a.occurredAt)+'</small></div></div>').join(''):'<p class="small">Changes appear here as your team works.</p>')+'</section>';
   return html;
 }
@@ -498,6 +515,9 @@ function exportReport(){
 }
 let needsSetup=false,signedInModel=null;
 function showAuth(setup,errorMessage=''){
+  usageTracker?.stop();usageTracker=null;usageUserId=null;PlatformAdmin.clear();
+  $('platformAdminNav')?.remove();
+  if(currentView==='admin'){$('editor').close();$('dialogBody').replaceChildren();$('content').replaceChildren();currentView='overview';}
   inlineDirty=false;formDirty=false;openDraft=null;$('replyComposer').hidden=true;
   needsSetup=setup;$('workspace').hidden=true;$('auth').hidden=false;
   $('auth').innerHTML='<section class="auth-story"><div class="brand"><span class="brand-mark">◈</span> ProfitPulse</div><h1>Small decisions.<br>Stronger business.</h1><p>From the first enquiry to the final payment. Keep your customers close and your numbers clear.</p><div class="story-foot">CUSTOMERS · QUOTATIONS · PAYMENTS · PROFIT</div></section><section class="auth-panel"><span class="eyebrow">YOUR BUSINESS WORKSPACE</span><h2>'+(setup?'Let’s set up your business.':'Welcome back.')+'</h2><p>'+(setup?'Start your 14-day trial. No card required to create your workspace.':'Sign in to pick up where your business left off.')+'</p><form id="authForm"><div id="authError" class="error" role="alert"'+(errorMessage?'':' hidden')+'>'+esc(errorMessage)+'</div>'+(setup?field('businessName','Business name','','text','required maxlength="500"')+field('name','Your name','','text','required maxlength="100"')+select('currency','Default business currency','USD',currencyOptions(),true)+select('plan','Trial plan',new URLSearchParams(location.search).get('plan') || 'starter',['starter','growth','business'],true)+field('locale','Number & date locale',navigator.language || 'en-US','text','required maxlength="50"')+field('timezone','Business timezone',Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC','text','required maxlength="100"'):'')+field('email','Email address','','email','required autocomplete="username" maxlength="254"')+field('password','Password','','password','required '+(setup?'minlength="12" autocomplete="new-password"':'autocomplete="current-password"')+' maxlength="256"')+'<button class="primary" type="submit">'+(setup?'Create business workspace':'Sign in')+'</button></form><button id="demoButton" class="demo-button">Explore the demo workspace →</button><p class="small">'+(setup?'Already have an account? <a href="/login">Sign in</a>. <a href="/">Back to home</a>.':'New here? <a href="/signup">Create your business workspace</a>. Team members sign in with the account their owner provides.')+'</p></section>';
@@ -515,7 +535,7 @@ function demoModel(){
   const invoice={...meta('demo-i1'),currency:q1.currency,quoteId:q1.id,customerId:c1.id,quote:Pulse.pricing(q1),issuedOn:day,dueOn:plusDays(day,14),status:'completed',costsFinalized:true,notes:'',terms:'Demo invoice',number:'INV-00001'};
   return{user:{id:'demo-user',name:'Demo Visitor',email:'demo@example.test',role:'viewer'},users:[{id:'demo-user',name:'Amina',active:true,role:'staff'}],business:{id:'demo',name:'Acacia Business · Demo',terms:'Payment within 14 days.',timezone:'UTC',currency:'USD',locale:'en-US',responseHours:24},records:{customers:[c1,c2,c3],leads:[lead('demo-l1',c1.id,'Can you quote for 50 premium brochures?', 'won',48,11020),lead('demo-l2',c2.id,'Naomba bei ya mifuko 10. Nahitaji kesho.','quoted',26,5000,{nextActionAt:new Date(Date.now()-3600000).toISOString()}),lead('demo-l3',c3.id,'Could you send a quotation for our event today?','new',30,12000)],quotes:[q1,q2],invoices:[invoice],payments:[{...meta('demo-p1'),currency:invoice.currency,invoiceId:invoice.id,amount:11020,fee:110.2,direction:'receipt',method:'M-Pesa',paidOn:day,reference:'DEMO-RECEIPT',notes:'Synthetic payment'}],expenses:[{...meta('demo-e1'),currency:invoice.currency,invoiceId:invoice.id,description:'Materials and production',amount:5300,category:'Materials',incurredOn:day}]},activity:[{userName:'Amina',action:'recorded payment for',kind:'invoice',occurredAt:stamp},{userName:'Amina',action:'accepted',kind:'quotation',occurredAt:stamp}]};
 }
-function startDemo(){signedInModel=model.user?model:null;demo=true;model=demoModel();currentView='overview';renderShell();renderView();}
+function startDemo(){PlatformAdmin.clear();signedInModel=model.user?model:null;demo=true;model=demoModel();currentView='overview';renderShell();renderView();}
 async function exitDemo(){demo=false;openDraft=null;if(signedInModel){model=signedInModel;signedInModel=null;await refresh();}else{model={records:emptyRecords(),users:[],business:{timezone:'UTC',currency:'USD',locale:'en-US'}};showAuth(location.pathname==='/signup');}}
 async function signOut(){
   if(openDraft&&!confirm('Sign out? Unsaved reply drafts will remain on this device for your account.'))return;
@@ -570,7 +590,7 @@ document.addEventListener('click',async event=>{
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
 $('closeDialog').onclick=closeDialog;
 $('editor').addEventListener('cancel',event=>{event.preventDefault();closeDialog();});
-$('syncButton').onclick=()=>{if(openDraft||inlineDirty){showToast('Save or close your current edit before refreshing.');return;}refresh().catch(handleError);};
+$('syncButton').onclick=()=>{if(openDraft||inlineDirty){showToast('Save or close your current edit before refreshing.');return;}refresh(true,true).catch(handleError);};
 $('exportButton').onclick=()=>downloadServer('/backup','profitpulse-backup-'+today()+'.json').catch(handleError);
 $('logoutButton').onclick=()=>signOut().catch(handleError);
 $('accountButton').onclick=()=>go('settings');
@@ -579,15 +599,20 @@ $('legacyImportButton').onclick=()=>{try{previewImport(null,localStorage.getItem
 $('legacyExportButton').onclick=()=>{try{download(localStorage.getItem('profitpulse'),'profitpulse-original-browser-data.json');}catch(error){handleError(error);}};
 document.addEventListener('input',event=>{if(event.target.closest('#settingsForm,#teamForm,#passwordForm'))inlineDirty=true;});
 document.querySelector('.sidebar .brand').onclick=event=>{event.preventDefault();go('overview');};
-window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing'].includes(view)&&view!==currentView)go(view);});
+window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin'].includes(view)&&view!==currentView)go(view);});
 window.addEventListener('beforeunload',event=>{if(formDirty||inlineDirty){event.preventDefault();event.returnValue='';}});
 setInterval(async()=>{
   if(demo||$('workspace').hidden)return;
-  try{await refresh(!$('editor').open&&!openDraft&&!inlineDirty);}catch(error){$('connectionText').textContent='Offline · edits are not synchronized';notice(error.status===401?'Your session expired. Download any unsaved reply and sign in again.':'Connection lost. Existing records remain on the server; save actions will report a failure until you reconnect.');}
+  try{await refresh(!$('editor').open&&!openDraft&&!inlineDirty);}catch(error){if(error.status===401&&currentView==='admin'){showAuth(false,'Your session expired. Sign in again.');return;}$('connectionText').textContent='Offline · edits are not synchronized';notice(error.status===401?'Your session expired. Download any unsaved reply and sign in again.':'Connection lost. Existing records remain on the server; save actions will report a failure until you reconnect.');}
   if(currentView==='leads'){for(const l of active('leads')){const p=Pulse.priority(l,Date.now(),model.business.responseHours);const tag=document.querySelector('[data-priority="'+CSS.escape(l.id)+'"]'),reasons=document.querySelector('[data-reasons="'+CSS.escape(l.id)+'"]');if(tag)tag.innerHTML=p.high?pill('Needs attention','high'):'';if(reasons)reasons.textContent=p.reasons.join(' · ');}}
 },30000);
+for(const event of ['pointerdown','pointermove','keydown','wheel','touchstart'])document.addEventListener(event,()=>usageTracker?.activity(),{passive:true});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')usageTracker?.flush(true);});
+window.addEventListener('pagehide',()=>usageTracker?.flush(true));
+window.addEventListener('blur',()=>usageTracker?.flush(true));
+setInterval(()=>usageTracker?.sample(),1000);
 async function boot(){
-  const requested=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing'].includes(requested))currentView=requested;
+  const requested=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin'].includes(requested))currentView=requested;
   needsSetup=location.pathname==='/signup';
   if(new URLSearchParams(location.search).get('demo')==='1'){startDemo();return;}
   try{

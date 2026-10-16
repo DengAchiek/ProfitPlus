@@ -13,7 +13,7 @@
     "deploy": "wrangler deploy",
     "test": "node --test test/*.test.cjs",
     "test:cloudflare": "node --test test/cloudflare.test.mjs",
-    "check": "node --check server.js && node --check lib/store.js && node --check dist/logic.js && node --check dist/app.js && node --check lib/billing.js && node --check dist/landing.js && node --check cloudflare/worker.mjs && node --check cloudflare/store.mjs && node --check cloudflare/http.mjs"
+    "check": "node --check server.js && node --check lib/store.js && node --check lib/analytics.js && node --check dist/logic.js && node --check dist/app.js && node --check dist/admin.js && node --check dist/usage.js && node --check lib/billing.js && node --check dist/landing.js && node --check cloudflare/worker.mjs && node --check cloudflare/store.mjs && node --check cloudflare/http.mjs"
   },
   "dependencies": {
     "@fontsource/noto-sans": "^5.3.0",

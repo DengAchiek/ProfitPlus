@@ -5,14 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { unstable_dev } from 'wrangler';
 import Stripe from 'stripe';
+import { createHash } from 'node:crypto';
 
 test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs, recovery, persistence', { timeout: 120000 }, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'profitplus-worker-'));
   const origin = 'http://127.0.0.1:8787';
+  let adminEmails='';
   const start = (vars = {}) => unstable_dev('cloudflare/worker.mjs', {
     config: 'wrangler.jsonc', ip: '127.0.0.1', port: 0, local: true,
     persist: true, persistTo: dir, logLevel: 'error',
-    vars: { PUBLIC_ORIGIN: origin, ...vars },
+    vars: { PUBLIC_ORIGIN: origin, PLATFORM_ADMIN_EMAILS:'', PLATFORM_ADMIN_EMAIL_SHA256:adminEmails?createHash('sha256').update(adminEmails).digest('hex'):'', ...vars },
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false },
   });
   let worker = await start();
@@ -72,6 +74,22 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.equal((await request('/api/bootstrap', 'GET', null, staff)).status, 401);
     assert.equal((await request('/api/login', 'POST', { email: user.email, password: 'synthetic-staff-password' })).status, 401);
   });
+  await t.test('platform admin configuration protects cross-workspace analytics and persists usage',async()=>{
+    assert.equal((await request('/api/admin/dashboard','GET',null,owner)).status,403);
+    await worker.stop();adminEmails=account('owner').email;worker=await start();
+    const boot=await(await request('/api/bootstrap','GET',null,owner)).json();assert.equal(boot.platformAdmin,true);
+    assert.equal((await(await request('/api/bootstrap','GET',null,other)).json()).platformAdmin,false);
+    for(const route of ['/api/admin/dashboard','/api/admin/users','/api/admin/users/'+owner.user.id]){
+      assert.equal((await request(route)).status,401);assert.equal((await request(route,'GET',null,other)).status,403);assert.equal((await request(route,'GET',null,owner)).status,200);
+    }
+    const pulse={module:'invoices',tabId:'worker-synthetic-tab',sequence:1,activeSeconds:0,view:true};
+    assert.equal((await request('/api/telemetry','POST',pulse,other,{'X-CSRF-Token':''})).status,403);
+    assert.equal((await request('/api/telemetry','POST',pulse,other)).status,200);
+    const profile=await(await request('/api/admin/users/'+other.user.id,'GET',null,owner)).json();assert.equal(profile.services[0].visits,1);
+    assert.doesNotMatch(JSON.stringify(profile),/password|csrf|token/);
+    const summary=await(await request('/api/admin/dashboard?days=7','GET',null,owner)).json();assert.equal(summary.totals.registeredUsers,3);assert.equal(summary.totals.activeUsers,2);assert.ok(summary.performance.requests>0);
+    assert.equal((await request('/api/register','POST',account('owner'))).status,422);
+  });
   await t.test('quote PDFs embed the bundled fonts without a local filesystem', async () => {
     const response = await request('/api/records/quotes', 'POST', { customerId: customer.id, currency: 'KES',
       items: [{ description: 'Worker service', quantity: 1, unitPrice: 1000, unitCost: 200 }],
@@ -108,6 +126,8 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const backup = await (await request('/api/backup', 'GET', null, owner)).json();
     assert.equal((await request('/api/restore/preview', 'POST', { backup }, owner)).status, 200);
     const boot = await (await request('/api/bootstrap', 'GET', null, owner)).json();
+    assert.equal(boot.platformAdmin,true);
+    const analytics=await(await request('/api/admin/users/'+other.user.id,'GET',null,owner)).json();assert.equal(analytics.services[0].visits,1);
     const result = await request('/api/restore', 'POST', { backup, revision: boot.business.revision }, owner);
     assert.equal(result.status, 200); const { safetyFile } = await result.json();
     const copies = await (await request('/api/backups', 'GET', null, owner)).json();

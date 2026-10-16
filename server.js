@@ -6,8 +6,9 @@ const { Store, AppError, publicUser } = require('./lib/store');
 const D = require('./dist/logic');
 const { Billing } = require('./lib/billing');
 const { documentPdf } = require('./lib/pdf');
+const { Analytics } = require('./lib/analytics');
 const LIMIT = 50 * 1024 * 1024;
-const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/app.js': 'app.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
+const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
 
 function createApplication(options = {}) {
   const backupLimit = options.backupLimit || LIMIT;
@@ -15,6 +16,8 @@ function createApplication(options = {}) {
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const publicOrigin = options.publicOrigin || process.env.PUBLIC_ORIGIN;
   const logger = options.logger || console;
+  const analytics = new Analytics(store, { adminEmails: options.adminEmails ?? process.env.PLATFORM_ADMIN_EMAILS, adminEmailHashes:options.adminEmailHashes ?? process.env.PLATFORM_ADMIN_EMAIL_SHA256, now: options.analyticsNow });
+  const measure = callback => { try { return callback(); } catch (error) { logger.error('Analytics measurement failed:', error.message); } };
   if(publicOrigin){const parsed=new URL(publicOrigin);if(parsed.origin!==publicOrigin||!['https:','http:'].includes(parsed.protocol))throw Error('PUBLIC_ORIGIN must be an exact HTTP(S) origin without a path or trailing slash.');}
   if (production && (!publicOrigin || !publicOrigin.startsWith('https://'))) throw Error('Set PUBLIC_ORIGIN to the HTTPS address of this deployment.');
   const billing = new Billing(store,{...options.billing,publicOrigin});
@@ -49,9 +52,14 @@ function createApplication(options = {}) {
     return { user, token };
   }
   const handleRequest = async (req, res) => {
+    const started = performance.now();
+    let measuredUser, measuredPath = '', responseStatus = 500;
+    const writeHead = res.writeHead.bind(res);
+    res.writeHead = (status, ...args) => { responseStatus = status; return writeHead(status, ...args); };
     try {
       const url = new URL(req.url, 'http://localhost');
       const route = url.pathname;
+      measuredPath = route;
       if (!route.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(req.method)) return json(res, 405, { error: 'Method not allowed.' });
         const files = STATIC_FILES;
@@ -75,14 +83,25 @@ function createApplication(options = {}) {
         if (attempt.count >= 10) throw new AppError(429, 'Too many attempts. Try again in 15 minutes.');
         attempt.count++; attempts.set(key, attempt);
         const input = await body(req);
+        if (route !== '/api/login') analytics.reserveEmail(input.email);
         if (route === '/api/setup' && !store.needsSetup()) throw new AppError(409, 'This installation is already set up. Sign in or ask an owner for an account.');
         const user = route !== '/api/login' ? store.createBusiness(input) : store.authenticate(input.email, input.password);
+        measure(() => { if (route !== '/api/login') analytics.registered(user); analytics.login(user); });
         const session = store.session(user);
         attempts.delete(key);
         return json(res, 200, { user: session.user, csrf: session.csrf }, { 'Set-Cookie': cookie(session.token) });
       }
       const { user, token } = auth(req);
-      if (route === '/api/bootstrap' && req.method === 'GET') return json(res, 200, { user: publicUser(user), csrf: user.csrf, business: store.business(user), records: store.records(user), users: store.users(user), activity: store.activity(user), subscription:store.subscription(user), backupStatus: user.role === 'owner' ? store.backupStatus : null });
+      measuredUser = user;
+      if (route.startsWith('/api/admin/')) {
+        analytics.requireAdmin(user);
+        if (route === '/api/admin/dashboard' && req.method === 'GET') return json(res,200,analytics.dashboard(user,url.searchParams.get('days')));
+        if (route === '/api/admin/users' && req.method === 'GET') return json(res,200,analytics.users(user,Object.fromEntries(url.searchParams)));
+        if (/^\/api\/admin\/users\/[^/]+$/.test(route) && req.method === 'GET') return json(res,200,analytics.profile(user,route.split('/')[4],url.searchParams.get('days')));
+        return json(res,404,{error:'Endpoint not found.'});
+      }
+      if (route === '/api/telemetry' && req.method === 'POST') return json(res,200,analytics.heartbeat(user,await body(req,4096)));
+      if (route === '/api/bootstrap' && req.method === 'GET') return json(res, 200, { user: publicUser(user), platformAdmin:analytics.isAdmin(user), csrf: user.csrf, business: store.business(user), records: store.records(user), users: store.users(user), activity: store.activity(user), subscription:store.subscription(user), backupStatus: user.role === 'owner' ? store.backupStatus : null });
       if(route==='/api/billing'&&req.method==='GET'){store.owner(user);return json(res,200,{subscription:store.subscription(user),catalog:await billing.catalog(),pendingCheckout:!!store.subscriptionRow(user).checkout_key});}
       if(route==='/api/billing/checkout'&&req.method==='POST')return json(res,200,await billing.checkout(user,await body(req)));
       if(route==='/api/billing/portal'&&req.method==='POST')return json(res,200,await billing.portal(user));
@@ -90,7 +109,7 @@ function createApplication(options = {}) {
       if (route === '/api/logout' && req.method === 'POST') { store.logout(token); return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('') }); }
       if (route === '/api/account/password' && req.method === 'POST') { const input = await body(req); store.changePassword(user, input.currentPassword, input.newPassword); return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('') }); }
       if (route === '/api/settings' && req.method === 'PUT') { const input = await body(req); return json(res, 200, store.saveSettings(user, input.settings, input.revision)); }
-      if (route === '/api/users' && req.method === 'POST') return json(res, 201, store.addUser(user, await body(req)));
+      if (route === '/api/users' && req.method === 'POST') { const input = await body(req); analytics.reserveEmail(input.email); const added = store.addUser(user,input); measure(()=>analytics.registered(added)); return json(res,201,added); }
       if (/^\/api\/users\/[^/]+$/.test(route) && req.method === 'PUT') return json(res, 200, store.updateUser(user, route.split('/')[3], await body(req)));
       if (route === '/api/backup' && req.method === 'GET') {
         const bytes = Buffer.from(JSON.stringify(store.export(user), null, 2));
@@ -135,12 +154,14 @@ function createApplication(options = {}) {
       if (status === 500) logger.error(new Date().toISOString(), req.method, req.url, error.stack);
       if (!res.headersSent) json(res, status, { error: status === 500 ? 'The operation could not be saved. Your edits remain available. Please retry or contact the owner.' : error.message });
       else res.end();
+    } finally {
+      measure(() => analytics.request(measuredPath,req.method,responseStatus,performance.now()-started,measuredUser));
     }
   };
   const server = http.createServer(handleRequest);
   let timer;
   if (options.startTimers !== false) { store.automaticBackup(); timer = setInterval(() => store.automaticBackup(), 60 * 60000); timer.unref(); }
-  return { server, store, billing, handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
+  return { server, store, billing, analytics, handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
 }
 if (require.main === module) {
   const app = createApplication();
