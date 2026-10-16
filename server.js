@@ -8,7 +8,7 @@ const { Billing } = require('./lib/billing');
 const { documentPdf } = require('./lib/pdf');
 const { Analytics } = require('./lib/analytics');
 const { AdminSetup } = require('./lib/admin-setup');
-const { Channels, formHeaders } = require('./lib/channels');
+const { Channels, formHeaders, oauthResult } = require('./lib/channels');
 const LIMIT = 50 * 1024 * 1024;
 const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/admin/setup':'admin-setup.html', '/admin-setup.js':'admin-setup.js', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/connections.js':'connections.js', '/capture.js':'capture.js', '/enquire':'enquire.html', '/enquire.js':'enquire.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
 
@@ -147,7 +147,7 @@ function createApplication(options = {}) {
       if(route==='/api/integrations/meta/start'&&req.method==='POST')return json(res,200,channels.startMeta(user,(await body(req)).provider));
       if(route==='/api/integrations/meta/connect'&&req.method==='POST')return json(res,201,await channels.connectMeta(user,(await body(req)).assetId));
       if(route==='/api/integrations/oauth/callback'&&req.method==='GET'){
-        let result='connected';try{await channels.finishMeta(user,Object.fromEntries(url.searchParams));}catch(error){result=error.status===422?'no_accounts':'failed';}
+        let result='connected';try{await channels.finishMeta(user,Object.fromEntries(url.searchParams));}catch(error){result=oauthResult(error);}
         res.writeHead(302,{...securityHeaders,'Cache-Control':'no-store',Location:'/app?channel='+result+'#integrations'});return res.end();
       }
       const disconnect=route.match(/^\/api\/integrations\/([\w-]+)\/disconnect$/);if(disconnect&&req.method==='POST')return json(res,200,await channels.disconnect(user,disconnect[1]));

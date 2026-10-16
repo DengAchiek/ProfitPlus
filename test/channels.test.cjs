@@ -40,6 +40,23 @@ test('website intake over HTTP: source identity, permissions, privacy and immuta
     const staff=store.addUser(user,{name:'Staff',email:'staff@example.test',password:account().password,role:'staff'}),s=store.session(staff);sessions[staff.id]={Cookie:'pulse_session='+s.token,'X-CSRF-Token':s.csrf};
     assert.equal((await request('/api/integrations/website','POST',{websiteOrigin:'https://client.example.test'},staff)).status,403);
   });
+  await t.test('Meta redirects distinguish expired, cancelled, empty-account and provider failures without leaking credentials',async()=>{
+    app.channels.saveAdminConfig(user,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
+    const callback=async(query,expected)=>{
+      const response=await fetch(origin+'/api/integrations/oauth/callback?'+new URLSearchParams(query),{headers:sessions[user.id],redirect:'manual'});
+      assert.equal(response.status,302);assert.equal(response.headers.get('location'),'/app?channel='+expected+'#integrations');assert.doesNotMatch(response.headers.get('location'),/synthetic-meta-secret|access_token|code=/);
+    };
+    const start=()=>new URL(app.channels.startMeta(user,'facebook').url).searchParams.get('state');
+    await callback({state:'unknown',code:'private-code'},'expired');
+    await callback({state:start(),error:'access_denied'},'cancelled');
+    const realFetch=app.channels.fetch;
+    app.channels.fetch=async url=>json(url.includes('/oauth/access_token')?{access_token:'private-token'}:{data:[]});
+    await callback({state:start(),code:'private-code'},'no_accounts');
+    app.channels.fetch=async()=>new Response(JSON.stringify({error:{message:'private-provider-error'}}),{status:400});
+    await callback({state:start(),code:'private-code'},'provider_error');
+    app.channels.fetch=realFetch;
+    app.channels.saveAdminConfig(user,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
+  });
   await t.test('website connection and embed are tenant scoped and permit framing only by the client site',async()=>{
     const r=await request('/api/integrations/website','POST',{websiteOrigin:'https://client.example.test',label:'Public enquiries',visitsEnabled:true});assert.equal(r.status,201);connection=await r.json();
     assert.equal((await(await request('/api/integrations','GET',null,other)).json()).connections.length,0);
