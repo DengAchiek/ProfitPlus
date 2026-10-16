@@ -32,6 +32,7 @@ export class ProfitPulseDatabase extends DurableObject {
       adminEmails: env.PLATFORM_ADMIN_EMAILS || '',
       adminEmailHashes: env.PLATFORM_ADMIN_EMAIL_SHA256 || '',
       adminSetup:{tokenHash:env.PLATFORM_ADMIN_SETUP_TOKEN_SHA256,emailHash:env.PLATFORM_ADMIN_SETUP_EMAIL_SHA256,expiresAt:env.PLATFORM_ADMIN_SETUP_EXPIRES_AT,mode:env.PLATFORM_ADMIN_SETUP_MODE},
+      channels:{meta:{appId:env.META_APP_ID,appSecret:env.META_APP_SECRET,version:env.META_API_VERSION},background:task=>ctx.waitUntil(task)},
       pdfFonts: { regular: Buffer.from(regularFont), bold: Buffer.from(boldFont) },
       billing: {
         stripe: env.STRIPE_SECRET_KEY ? new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2, timeout: 20000 }) : null,
@@ -66,6 +67,13 @@ export default {
     const headers = new Headers(asset.headers);
     for (const [name, value] of Object.entries(securityHeaders)) headers.set(name, value);
     headers.set('Cache-Control', 'no-cache');
+    if(url.pathname==='/enquire'){
+      if(!env.DATABASE)return errorResponse(503,'The enquiry form is unavailable.');
+      const infoURL=new URL('/api/capture/'+encodeURIComponent(url.searchParams.get('site')||'missing')+'/info',url.origin);
+      const response=await env.DATABASE.get(env.DATABASE.idFromName('profitpulse-v3')).fetch(new Request(infoURL));
+      if(!response.ok)return errorResponse(404,'This enquiry form is unavailable.');
+      const info=await response.json();headers.delete('X-Frame-Options');headers.set('Content-Security-Policy',securityHeaders['Content-Security-Policy'].replace("frame-ancestors 'none'",'frame-ancestors '+info.websiteOrigin));headers.set('Cache-Control','no-store');
+    }
     if (url.protocol === 'https:') headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     return new Response(asset.body, { status: asset.status, headers });
   },

@@ -1,6 +1,6 @@
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory();else root.PulseUsage=factory();})(typeof globalThis!=='undefined'?globalThis:this,function(){
   'use strict';
-  const modules = ['overview','customers','leads','quotes','invoices','reports','settings','billing'];
+  const modules = ['overview','customers','leads','quotes','invoices','reports','integrations','settings','billing'];
   function create({send,now=Date.now,visible,tabId}) {
     let module=null,lastTick=now(),lastInteraction=now(),lastSent=0,seconds=0,view=false,sequence=0;
     function tick() {

@@ -73,7 +73,7 @@ async function refresh(render = true,reloadAdmin=false) {
   const data = await api('/bootstrap');
   model = data;
   $('connectionText').textContent = 'Connected · changes saved on server';
-  if (render && !$('editor').open && !openDraft && !inlineDirty) { notice(''); renderShell(); if(currentView!=='admin'||!$('adminData'))renderView();else if(reloadAdmin)PlatformAdmin.reload(); }
+  if (render && !$('editor').open && !openDraft && !inlineDirty) { notice(''); renderShell(); if(currentView==='integrations'&&$('connectionsData')){if(reloadAdmin)Connections.reload();}else if(currentView!=='admin'||!$('adminData'))renderView();else if(reloadAdmin)PlatformAdmin.reload(); }
   else if (previousRevision !== data.business.revision) notice('Workspace updates are available. Finish your current edit, then refresh.');
 }
 async function savedRefresh(record, kind) {
@@ -133,7 +133,7 @@ function inRange(value) {
 }
 function filtered(kind) {
   let rows = model.records[kind].filter(r => !!r.archived === filters.archived);
-  if (filters.query) { const needle = filters.query.toLowerCase(); rows = rows.filter(r => [r.name,r.company,r.phone,r.email,r.number,r.message,r.notes,customer(r.customerId).name].some(s => String(s || '').toLowerCase().includes(needle))); }
+  if (filters.query) { const needle = filters.query.toLowerCase(); rows = rows.filter(r => [r.name,r.company,r.phone,r.email,r.number,r.message,r.notes,r.captured?.handle,r.captured?.email,r.captured?.phone,customer(r.customerId).name,customer(r.customerId).email,customer(r.customerId).phone].some(s => String(s || '').toLowerCase().includes(needle))); }
   if (filters.status) rows = rows.filter(r => (kind === 'quotes' ? quoteStatus(r) : r.status) === filters.status || (kind === 'invoices' && Pulse.invoiceSummary(r,model.records.payments,model.records.expenses).paymentStatus === filters.status));
   if (filters.channel) rows = rows.filter(r => r.channel === filters.channel);
   rows = rows.filter(r => inRange(r.receivedAt || r.issuedOn || r.createdAt));
@@ -165,7 +165,7 @@ function overview() {
   const received = active('payments').filter(p=>p.currency===selectedCurrency()).reduce((s,p) => s+(p.direction==='refund'?-p.amount:p.amount),0), outstanding = summaries.reduce((s,r) => s+Math.max(0,r.balance),0), profit = summaries.reduce((s,r) => s+(r.actualProfit ?? 0),0);
   const decisions = model.records.quotes.filter(q => ['accepted','declined','expired'].includes(quoteStatus(q)));
   const rate = decisions.length ? Math.round(decisions.filter(q => q.status === 'accepted').length/decisions.length*100) + '%' : '—';
-  return heading('A clearer view of your business.','Your customers, follow-ups, and money — all in one place.',button('new','+ Add enquiry','','leads','primary')) +
+  return heading('A clearer view of your business.','Your customers, follow-ups, and money — all in one place.',button('go','View collected enquiries','','leads','primary')) +
     '<div class="toolbar">'+currencyControl()+'<p class="small">Money totals use this currency. No exchange conversion is applied.</p></div><div class="metrics">' + metric('Collected payments',money(received),'Receipts less refunds · includes tax',true) + metric('Outstanding invoices',money(outstanding),'Active invoices · includes tax') + metric('Actual profit',money(profit),'Completed orders with finalized costs',false,profit<0) + metric('Follow-ups overdue',overdue.length,'New enquiries and scheduled follow-ups') + metric('Open enquiries',leads.filter(l => !['won','lost'].includes(l.status)).length,'Across all channels') + metric('Quote acceptance',rate,'Accepted ÷ decided quotes') + '</div>' +
     '<div class="grid"><section class="card"><div class="card-head"><h2>Next on your list</h2>' + button('go','All enquiries →','','leads','quiet') + '</div>' +
     (overdue.length ? overdue.slice(0,5).map(l => '<div class="timeline-row"><span class="timeline-dot"></span><div class="full"><strong>' + esc(customer(l.customerId).name) + '</strong><small>' + esc(l.nextActionAt ? 'Follow-up due ' + when(l.nextActionAt) : 'Waiting since ' + when(l.receivedAt)) + ' · ' + esc(member(l.assignedTo)) + '</small></div>' + button('edit','Follow up',l.id,'leads') + '</div>').join('') : empty('You’re up to date.','Overdue enquiries and scheduled follow-ups will appear here.')) + '</section>' +
@@ -173,15 +173,26 @@ function overview() {
     (model.activity.length ? model.activity.slice(0,5).map(a => '<div class="timeline-row"><span class="timeline-dot"></span><div><strong>' + esc(a.userName) + '</strong> ' + esc(a.action) + ' ' + esc(a.kind) + '<small>' + when(a.occurredAt) + '</small></div></div>').join('') : empty('Your story starts here.','Add your first customer to begin.')) + '</section></div>' +
     '<section class="card"><div class="card-head"><h2>Open sales & payments</h2>' + button('go','All sales →','','invoices','quiet') + '</div>' + (invoices.length ? invoiceTable(invoices.slice(0,5)) : empty('From quote to payment.','Create an invoice directly or convert an accepted quotation to track payments and actual costs.',button('go','Create an invoice','','invoices'))) + '</section>';
 }
+function capturedDetails(lead){
+  const c=lead.captured;
+  if(!c)return '<div class="section-note">Historical enquiry · '+esc(lead.channel)+' · '+esc(when(lead.receivedAt))+'</div><div class="captured-message">'+esc(lead.message)+'</div>';
+  const rows=[['Platform',lead.channel],['Connected account',c.accountName],['Customer name',c.name||'Not shared'],['Social handle',c.handle?'@'+c.handle:'Not shared'],['Email',c.email||'Not shared'],['Phone',c.phone||'Not shared'],['Platform customer ID',c.senderId],['Interaction',cap(c.type)]];
+  if(c.type==='call')rows.push(['Call status',cap(c.callStatus)],['Call duration',c.callDuration===null?'Not provided':c.callDuration+' seconds']);
+  if(c.pageURL)rows.push(['Website page',c.pageURL]);if(c.referrer)rows.push(['Referring page',c.referrer]);if(c.campaign)rows.push(['Campaign',c.campaign]);
+  return '<div class="section-note">Collected from '+esc(lead.channel)+' · '+esc(when(lead.receivedAt))+'. The original interaction and source are read only.</div><dl class="source-details">'+rows.map(([label,value])=>'<div><dt>'+esc(label)+'</dt><dd>'+esc(value)+'</dd></div>').join('')+'</dl><div class="captured-message">'+esc(lead.message)+'</div>';
+}
 function renderLeads(rows) {
-  return '<div class="lead-list">' + rows.map(l => { const p = Pulse.priority(l,Date.now(),model.business.responseHours); return '<article class="lead-card" data-lead="' + esc(l.id) + '"><div class="lead-head"><div><h3>' + esc(customer(l.customerId).name) + '</h3><span class="small">' + esc(l.channel) + ' · ' + when(l.receivedAt) + '</span></div><div>' + pill(l.archived ? 'archived' : l.status) + ' <span data-priority="' + esc(l.id) + '">' + (p.high ? pill('Needs attention','high') : '') + '</span></div></div><p class="lead-message">' + esc(l.message) + '</p><div class="lead-meta"><span>' + esc(member(l.assignedTo)) + '</span><span>' + (l.value === null ? 'Value not entered' : money(l.value,l.currency) + ' potential value') + '</span><span class="due">' + (l.nextActionAt ? 'Next action: ' + when(l.nextActionAt) : 'No follow-up scheduled') + '</span></div><p class="small" data-reasons="' + esc(l.id) + '">' + esc(p.reasons.join(' · ')) + '</p><div class="actions">' + button('detail','Customer history',l.customerId,'customers') + button('edit','Edit / follow up',l.id,'leads') + button('history','Status history',l.id,'leads') + (!l.archived ? button('quoteFromLead','Create quote',l.id) + button('draft','Prepare reply',l.id) : '') + button(l.archived ? 'restoreRecord':'archive',l.archived ? 'Restore':'Archive',l.id,'leads') + '</div><div id="draft-' + esc(l.id) + '"></div></article>'; }).join('') + '</div>';
+  return '<div class="lead-list">'+rows.map(l=>{
+    const p=Pulse.priority(l,Date.now(),model.business.responseHours),c=customer(l.customerId),source=l.captured;
+    return '<article class="lead-card" data-lead="'+esc(l.id)+'"><div class="lead-head"><div><h3>'+esc(c.name)+'</h3><span class="small">'+esc(l.channel)+' · '+when(l.receivedAt)+(source?' · '+esc(source.accountName):' · Historical record')+'</span></div><div>'+pill(l.archived?'archived':l.status)+' <span data-priority="'+esc(l.id)+'">'+(p.high?pill('Needs attention','high'):'')+'</span></div></div><p class="lead-message">'+esc(l.message)+'</p><div class="lead-meta"><span>'+esc(source?.handle?'@'+source.handle:'')+'</span><span>'+esc(c.email||source?.email||'Email not shared')+'</span><span>'+esc(c.phone||source?.phone||'Phone not shared')+'</span></div><div class="lead-meta"><span>'+esc(member(l.assignedTo))+'</span><span>'+(l.value===null?'Value not entered':money(l.value,l.currency)+' potential value')+'</span><span class="due">'+(l.nextActionAt?'Next action: '+when(l.nextActionAt):'No follow-up scheduled')+'</span></div><p class="small" data-reasons="'+esc(l.id)+'">'+esc(p.reasons.join(' · '))+'</p><div class="actions">'+button('edit','Captured details / follow up',l.id,'leads')+button('detail','Customer history',l.customerId,'customers')+button('history','Status history',l.id,'leads')+(!l.archived?button('quoteFromLead','Create quote',l.id)+button('draft','Prepare reply',l.id):'')+button(l.archived?'restoreRecord':'archive',l.archived?'Restore':'Archive',l.id,'leads')+'</div></article>';
+  }).join('')+'</div>';
 }
 function renderList(kind) {
-  const names = {customers:['People behind your business.','Keep contact details, notes, and a complete customer history.','customer'],leads:['Every enquiry, a next step.','Capture interest, assign a follow-up, and keep conversations moving.','enquiry'],quotes:['Price with confidence.','Build professional quotes and protect your margin.','quotation'],invoices:['Professional invoices, ready to send.','Create an invoice directly or from an accepted quotation, then track payments and costs.','invoice']};
+  const names = {customers:['People behind your business.','Keep contact details, notes, and a complete customer history.','customer'],leads:['Your collected customer enquiries.','Messages, calls and website enquiries from connected customer channels.','enquiry'],quotes:['Price with confidence.','Build professional quotes and protect your margin.','quotation'],invoices:['Professional invoices, ready to send.','Create an invoice directly or from an accepted quotation, then track payments and costs.','invoice']};
   const [title,intro,label] = names[kind], rows = filtered(kind), visible = paginate(rows);
-  const create = kind === 'invoices' ? '<div class="actions">'+button('new','+ Create invoice','','invoices','primary')+button('invoiceFromQuote','From quotation')+'</div>' : button('new','+ Add ' + label,'',kind,'primary');
+  const create = kind === 'leads' ? (model.user?.role==='owner'&&!demo?button('go','Connect customer channels','','integrations','primary'):'') : kind === 'invoices' ? '<div class="actions">'+button('new','+ Create invoice','','invoices','primary')+button('invoiceFromQuote','From quotation')+'</div>' : button('new','+ Add ' + label,'',kind,'primary');
   return heading(title,intro,create) + toolbar(kind) +
-    (rows.length ? (kind === 'leads' ? renderLeads(visible) : '<section class="card">' + (kind === 'customers' ? customerTable(visible) : kind === 'quotes' ? quoteTable(visible) : invoiceTable(visible)) + '</section>') : '<section class="card">' + empty('No ' + (filters.archived ? 'archived ' : '') + label + 's here.',filters.query || filters.status || filters.from || filters.to ? 'Try changing your filters.' : kind === 'customers' ? 'Start with a customer. Their enquiries, quotes, and sales stay connected.' : kind === 'invoices' ? 'Choose Create invoice to enter items directly, or From quotation to convert accepted work.' : 'Create a customer and follow the workflow to get started.',create) + '</section>') + pagination(rows.length);
+    (rows.length ? (kind === 'leads' ? renderLeads(visible) : '<section class="card">' + (kind === 'customers' ? customerTable(visible) : kind === 'quotes' ? quoteTable(visible) : invoiceTable(visible)) + '</section>') : '<section class="card">' + empty('No ' + (filters.archived ? 'archived ' : '') + label + 's here.',filters.query || filters.status || filters.from || filters.to ? 'Try changing your filters.' : kind === 'customers' ? 'Start with a customer. Their enquiries, quotes, and sales stay connected.' : kind === 'invoices' ? 'Choose Create invoice to enter items directly, or From quotation to convert accepted work.' : kind==='leads'?'Connect a channel and wait for a customer interaction. Enquiries are collected automatically.':'Create a customer and follow the workflow to get started.',create) + '</section>') + pagination(rows.length);
 }
 function salesChannel(invoice) { const q = model.records.quotes.find(q => q.id === invoice.quoteId); return model.records.leads.find(l => l.id === q?.leadId)?.channel || 'Unattributed'; }
 function barChart(entries) {
@@ -211,12 +222,12 @@ function renderReports() {
     '<section class="card"><h2>Invoice detail</h2>' + (r.invoices.length ? invoiceTable(paginate(r.invoices))+pagination(r.invoices.length) : empty('No matching invoices.','Adjust the period or create your first invoice.')) + '</section><div class="report-definitions"><strong>How these numbers work.</strong> Monetary totals and quote acceptance use the selected currency. Exchange conversion is not applied.  Payment totals use payment dates and include tax; refunds subtract from receipts. Invoice sales and balances use invoice issue dates. Estimated profit excludes tax and uses entered costs plus expected fees. Actual profit excludes tax and appears only for completed orders with finalized costs; it uses recorded costs and actual payment fees. It is an order margin, not a cash balance. Quote acceptance uses recorded decisions. Archived quotes and invoices retain their financial history. Cancelled invoices are excluded from sales; archived payment and cost entries are excluded from calculations.</div>';
 }
 function renderView() {
-  const renderer = currentView === 'admin' ? PlatformAdmin.render : currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
+  const renderer = currentView === 'integrations' ? Connections.render : currentView === 'admin' ? PlatformAdmin.render : currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
   $('content').innerHTML = renderer();
   bindToolbar();
   if(currentView==='billing'&&!demo&&model.user?.role==='owner')loadBilling();
   if(currentView==='settings'&&!demo&&model.user?.role==='owner')loadSafetyCopies();
-  if(currentView==='admin')PlatformAdmin.mount();
+  if(currentView==='admin')PlatformAdmin.mount();if(currentView==='integrations')Connections.mount();
   try{if(localStorage.getItem('profitpulse.migrated.'+model.business.id))$('legacyNotice').hidden=true;}catch{}
   if (demo) document.querySelectorAll('[data-action="new"],[data-action="edit"],[data-action="archive"],[data-action="restoreRecord"],[data-action="quoteFromLead"],[data-action="invoiceFromQuote"],[data-action="invoiceFromCustomer"],[data-action="draft"],[data-action="pdf"],[data-action="csv"]').forEach(b => b.disabled = true);
 }
@@ -275,6 +286,7 @@ function invoiceSourcePreview(record) {
 }
 function openForm(kind, previous = null, preset = {}) {
   ensureWritable();
+  if(kind==='leads'&&!previous){go('integrations');showToast('Enquiries are captured from connected customer channels.');return;}
   if (['leads','quotes','invoices'].includes(kind) && !active('customers').length && !previous) { go('customers'); showToast('Add a customer first, then create their enquiry, quotation, or invoice.'); return; }
   const v = previous || (kind === 'quotes' ? defaultQuote(preset) : kind === 'invoices' ? defaultInvoice(preset) : {...preset});
   const fromQuote=kind==='invoices' && Boolean(v.quoteId || preset.fromQuote);
@@ -288,11 +300,7 @@ function openForm(kind, previous = null, preset = {}) {
   if (kind === 'customers') {
     html += '<div class="pair">' + field('name','Customer name',v.name,'text','required maxlength="100"') + field('company','Company',v.company,'text','maxlength="150"') + field('phone','Phone / WhatsApp',v.phone,'tel','maxlength="50"') + field('email','Email',v.email,'email','maxlength="254"') + '</div>' + select('preferredCurrency','Preferred currency',v.preferredCurrency,currencyOptions(),true)+area('address','Address',v.address,500) + area('notes','Customer notes',v.notes);
   } else if (kind === 'leads') {
-    html += '<div class="pair">' + select('customerId','Customer',v.customerId || '',customerOptions(v.customerId),true) + select('channel','Channel',v.channel || 'WhatsApp',Pulse.channels,true) +
-      select('status','Enquiry status',v.status || 'new',Pulse.leadStatuses,true) + select('assignedTo','Assigned to',v.assignedTo || '',[{value:'',label:'Unassigned'},...model.users.filter(u=>u.active).map(u=>({value:u.id,label:u.name}))]) + '</div>' +
-      select('currency','Enquiry currency',v.currency,currencyOptions(),true)+area('message','Customer message',v.message) + '<div class="pair">' + field('receivedAt','Received at · device local time',localTime(v.receivedAt),'datetime-local','required') + field('nextActionAt','Next follow-up · device local time',v.nextActionAt ? localTime(v.nextActionAt) : '','datetime-local') +
-      field('value','Potential sale value · currency',v.value ?? '','number','min="0" max="1000000000" step="0.01"') + select('priority','Priority',v.priority || 'auto',['auto','high','normal','low']) + '</div>' +
-      (!previous ? '<label class="checkbox"><input type="checkbox" name="receivedNow" checked> Received now (uses the time when you save)</label>' : '') + area('notes','Notes / next action',v.notes) + area('lostReason','Reason if lost',v.lostReason,500);
+    html+=capturedDetails(v)+'<div class="form-section"><h3>Follow-up details</h3><div class="pair">'+select('status','Enquiry status',v.status,Pulse.leadStatuses,true)+select('assignedTo','Assigned to',v.assignedTo||'',[{value:'',label:'Unassigned'},...model.users.filter(u=>u.active).map(u=>({value:u.id,label:u.name}))])+select('currency','Enquiry currency',v.currency,currencyOptions(),true)+field('nextActionAt','Next follow-up · device local time',v.nextActionAt?localTime(v.nextActionAt):'','datetime-local')+field('value','Potential sale value · currency',v.value??'','number','min="0" max="1000000000" step="0.01"')+select('priority','Priority',v.priority||'auto',['auto','high','normal','low'])+'</div>'+area('notes','Notes / next action',v.notes)+area('lostReason','Reason if lost',v.lostReason,500)+'</div>';
   } else if (kind === 'quotes') {
     const leads = model.records.leads.filter(l => l.customerId === v.customerId && !l.archived);
     html += '<div class="pair">' + select('customerId','Customer',v.customerId,customerOptions(v.customerId),true) + select('leadId','Linked enquiry',v.leadId || '',[{value:'',label:'No linked enquiry'},...leads.map(l=>({value:l.id,label:l.channel+' · '+l.message.slice(0,60)}))]) +
@@ -337,12 +345,7 @@ function openForm(kind, previous = null, preset = {}) {
     updateCalculation();
   }
   if(kind==='invoices' && fromQuote && !previous){form.elements.quoteId.onchange=()=>{const source=model.records.quotes.find(q=>q.id===form.elements.quoteId.value);v.currency=source?.currency || model.business.currency;form.elements.terms.value=source?.terms || '';$('invoiceSourcePreview').innerHTML=invoiceSourcePreview(source);setCashCurrency();formDirty=true;};}
-  if (kind === 'leads' && !previous) {
-    const now = $('recordForm').elements.receivedNow, received = $('recordForm').elements.receivedAt;
-    received.disabled = true; now.onchange = () => received.disabled = now.checked;
-    $('recordForm').elements.message.required = true;
-  }
-  if (kind === 'leads') {form.elements.message.required = true;form.elements.customerId.onchange=event=>{if(!previous&&!form.dataset.currencyChosen&&!Number(form.elements.value.value)){form.elements.currency.value=customer(event.target.value).preferredCurrency || model.business.currency;setCashCurrency();}};}
+
 }
 function gatherForm() {
   const {kind,previous,v,editablePricing} = formContext, form = $('recordForm'), data = Object.fromEntries(new FormData(form));
@@ -351,7 +354,7 @@ function gatherForm() {
   for (const key of numberFields) data[key] = Number(data[key]);
   if (editablePricing) data.items = [...$('lineItems').querySelectorAll('.line-item')].map(row => Object.fromEntries(['description','quantity','unitPrice','unitCost'].map(k => [k,k==='description' ? row.querySelector('[name="'+k+'"]').value : Number(row.querySelector('[name="'+k+'"]').value)])));
   if (kind === 'leads') {
-    data.receivedAt = data.receivedNow ? new Date().toISOString() : new Date(data.receivedAt).toISOString();
+    data.customerId=previous.customerId;data.channel=previous.channel;data.message=previous.message;data.receivedAt=previous.receivedAt;data.captured=previous.captured;
     data.nextActionAt = data.nextActionAt ? new Date(data.nextActionAt).toISOString() : null;
     data.value = data.value === '' ? null : Number(data.value); data.draft = previous?.draft || '';
   }
@@ -398,7 +401,7 @@ function openDetail(kind,id) {
   let html;
   if (kind === 'customers') {
     const leads = model.records.leads.filter(l=>l.customerId===id), quotes = model.records.quotes.filter(q=>q.customerId===id), invoices=model.records.invoices.filter(i=>i.customerId===id);
-    html = '<div class="pair"><div class="contact-detail"><strong>'+esc(r.company||r.name)+'</strong><p>'+[r.phone,r.email,r.address].filter(Boolean).map(esc).join('<br>')+'</p></div><div><p class="small">'+esc(r.notes||'No customer notes.')+'</p><div class="actions">'+button('edit','Edit customer',id,'customers')+button('leadFromCustomer','+ Enquiry',id)+button('quoteFromCustomer','+ Quote',id)+button('invoiceFromCustomer','+ Invoice',id)+'</div></div></div><div class="form-section"><h3>Enquiries ('+leads.length+')</h3>'+
+    html = '<div class="pair"><div class="contact-detail"><strong>'+esc(r.company||r.name)+'</strong><p>'+[r.phone,r.email,r.address].filter(Boolean).map(esc).join('<br>')+'</p></div><div><p class="small">'+esc(r.notes||'No customer notes.')+'</p><div class="actions">'+button('edit','Edit customer',id,'customers')+button('quoteFromCustomer','+ Quote',id)+button('invoiceFromCustomer','+ Invoice',id)+'</div></div></div><div class="form-section"><h3>Enquiries ('+leads.length+')</h3>'+
       (leads.length?leads.map(l=>'<div class="timeline-row"><span class="timeline-dot"></span><div class="full"><strong>'+esc(l.channel)+' · '+esc(l.status)+'</strong><p class="small">'+esc(l.message)+'</p><small>'+when(l.receivedAt)+'</small></div>'+button('edit','Open',l.id,'leads')+'</div>').join(''):'<p class="small">No enquiries yet.</p>')+'</div><div class="form-section"><h3>Quotations</h3>'+ (quotes.length?quoteTable(quotes):'<p class="small">No quotations yet.</p>')+'</div><div class="form-section"><h3>Sales & payments</h3>'+ (invoices.length?invoiceTable(invoices):'<p class="small">No invoices yet.</p>')+'</div>';
   } else if (kind === 'quotes') {
     const totals = Pulse.calculateQuote(r), invoice = model.records.invoices.find(i=>i.quoteId===id&&i.status!=='cancelled');
@@ -515,9 +518,9 @@ function exportReport(){
 }
 let needsSetup=false,signedInModel=null;
 function showAuth(setup,errorMessage=''){
-  usageTracker?.stop();usageTracker=null;usageUserId=null;PlatformAdmin.clear();
+  usageTracker?.stop();usageTracker=null;usageUserId=null;PlatformAdmin.clear();Connections.clear();
   $('platformAdminNav')?.remove();
-  if(currentView==='admin'){$('editor').close();$('dialogBody').replaceChildren();$('content').replaceChildren();currentView='overview';}
+  if(['admin','integrations'].includes(currentView)){$('editor').close();$('dialogBody').replaceChildren();$('content').replaceChildren();currentView='overview';}
   inlineDirty=false;formDirty=false;openDraft=null;$('replyComposer').hidden=true;
   needsSetup=setup;$('workspace').hidden=true;$('auth').hidden=false;
   $('auth').innerHTML='<section class="auth-story"><div class="brand"><span class="brand-mark">◈</span> ProfitPulse</div><h1>Small decisions.<br>Stronger business.</h1><p>From the first enquiry to the final payment. Keep your customers close and your numbers clear.</p><div class="story-foot">CUSTOMERS · QUOTATIONS · PAYMENTS · PROFIT</div></section><section class="auth-panel"><span class="eyebrow">YOUR BUSINESS WORKSPACE</span><h2>'+(setup?'Let’s set up your business.':'Welcome back.')+'</h2><p>'+(setup?'Start your 14-day trial. No card required to create your workspace.':'Sign in to pick up where your business left off.')+'</p><form id="authForm"><div id="authError" class="error" role="alert"'+(errorMessage?'':' hidden')+'>'+esc(errorMessage)+'</div>'+(setup?field('businessName','Business name','','text','required maxlength="500"')+field('name','Your name','','text','required maxlength="100"')+select('currency','Default business currency','USD',currencyOptions(),true)+select('plan','Trial plan',new URLSearchParams(location.search).get('plan') || 'starter',['starter','growth','business'],true)+field('locale','Number & date locale',navigator.language || 'en-US','text','required maxlength="50"')+field('timezone','Business timezone',Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC','text','required maxlength="100"'):'')+field('email','Email address','','email','required autocomplete="username" maxlength="254"')+field('password',setup?'Create a ProfitPlus password':'ProfitPlus password','','password','required '+(setup?'minlength="12" autocomplete="new-password"':'autocomplete="current-password"')+' maxlength="256"')+(setup?'':'<p class="small">Use the password created for your ProfitPlus account. Google sign-in is not enabled.</p>')+'<button class="primary" type="submit">'+(setup?'Create business workspace':'Sign in')+'</button></form><button id="demoButton" class="demo-button">Explore the demo workspace →</button><p class="small">'+(setup?'Already have an account? <a href="/login">Sign in</a>. <a href="/">Back to home</a>.':'New here? <a href="/signup">Create your business workspace</a>. Team members sign in with the account their owner provides.')+'</p></section>';
@@ -535,7 +538,7 @@ function demoModel(){
   const invoice={...meta('demo-i1'),currency:q1.currency,quoteId:q1.id,customerId:c1.id,quote:Pulse.pricing(q1),issuedOn:day,dueOn:plusDays(day,14),status:'completed',costsFinalized:true,notes:'',terms:'Demo invoice',number:'INV-00001'};
   return{user:{id:'demo-user',name:'Demo Visitor',email:'demo@example.test',role:'viewer'},users:[{id:'demo-user',name:'Amina',active:true,role:'staff'}],business:{id:'demo',name:'Acacia Business · Demo',terms:'Payment within 14 days.',timezone:'UTC',currency:'USD',locale:'en-US',responseHours:24},records:{customers:[c1,c2,c3],leads:[lead('demo-l1',c1.id,'Can you quote for 50 premium brochures?', 'won',48,11020),lead('demo-l2',c2.id,'Naomba bei ya mifuko 10. Nahitaji kesho.','quoted',26,5000,{nextActionAt:new Date(Date.now()-3600000).toISOString()}),lead('demo-l3',c3.id,'Could you send a quotation for our event today?','new',30,12000)],quotes:[q1,q2],invoices:[invoice],payments:[{...meta('demo-p1'),currency:invoice.currency,invoiceId:invoice.id,amount:11020,fee:110.2,direction:'receipt',method:'M-Pesa',paidOn:day,reference:'DEMO-RECEIPT',notes:'Synthetic payment'}],expenses:[{...meta('demo-e1'),currency:invoice.currency,invoiceId:invoice.id,description:'Materials and production',amount:5300,category:'Materials',incurredOn:day}]},activity:[{userName:'Amina',action:'recorded payment for',kind:'invoice',occurredAt:stamp},{userName:'Amina',action:'accepted',kind:'quotation',occurredAt:stamp}]};
 }
-function startDemo(){PlatformAdmin.clear();signedInModel=model.user?model:null;demo=true;model=demoModel();currentView='overview';renderShell();renderView();}
+function startDemo(){PlatformAdmin.clear();Connections.clear();signedInModel=model.user?model:null;demo=true;model=demoModel();currentView='overview';renderShell();renderView();}
 async function exitDemo(){demo=false;openDraft=null;if(signedInModel){model=signedInModel;signedInModel=null;await refresh();}else{model={records:emptyRecords(),users:[],business:{timezone:'UTC',currency:'USD',locale:'en-US'}};showAuth(location.pathname==='/signup');}}
 async function signOut(){
   if(openDraft&&!confirm('Sign out? Unsaved reply drafts will remain on this device for your account.'))return;
@@ -560,7 +563,7 @@ document.addEventListener('click',async event=>{
     else if(action==='next'){page++;renderView();}
     else if(action==='quoteFromLead'){const l=model.records.leads.find(l=>l.id===id);openForm('quotes',null,{customerId:l.customerId,leadId:id,currency:l.currency});}
     else if(action==='quoteFromCustomer')openForm('quotes',null,{customerId:id});
-    else if(action==='leadFromCustomer')openForm('leads',null,{customerId:id});
+    else if(action==='leadFromCustomer')go('integrations');
     else if(action==='duplicateQuote'){const q=model.records.quotes.find(q=>q.id===id);openForm('quotes',null,{...q,id:undefined,number:undefined,version:undefined,status:'draft',issuedOn:today(),expiresOn:plusDays(today(),14)});}
     else if(action==='acceptQuote'){const q=model.records.quotes.find(q=>q.id===id);await saveRecord('quotes',{...q,status:'accepted'},q);showToast('Quotation marked accepted.');openDetail('quotes',id);}
     else if(action==='invoiceFromQuote')openForm('invoices',null,{quoteId:id || null,fromQuote:true});
@@ -597,9 +600,9 @@ $('accountButton').onclick=()=>go('settings');
 $('exitDemo').onclick=()=>exitDemo().catch(handleError);
 $('legacyImportButton').onclick=()=>{try{previewImport(null,localStorage.getItem('profitpulse')).catch(handleError);}catch(error){handleError(error);}};
 $('legacyExportButton').onclick=()=>{try{download(localStorage.getItem('profitpulse'),'profitpulse-original-browser-data.json');}catch(error){handleError(error);}};
-document.addEventListener('input',event=>{if(event.target.closest('#settingsForm,#teamForm,#passwordForm'))inlineDirty=true;});
+document.addEventListener('input',event=>{if(event.target.closest('#settingsForm,#teamForm,#passwordForm,#websiteConnection,#twilioConnection,#metaAppForm'))inlineDirty=true;});
 document.querySelector('.sidebar .brand').onclick=event=>{event.preventDefault();go('overview');};
-window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin'].includes(view)&&view!==currentView)go(view);});
+window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin','integrations'].includes(view)&&view!==currentView)go(view);});
 window.addEventListener('beforeunload',event=>{if(formDirty||inlineDirty){event.preventDefault();event.returnValue='';}});
 setInterval(async()=>{
   if(demo||$('workspace').hidden)return;
@@ -612,7 +615,7 @@ window.addEventListener('pagehide',()=>usageTracker?.flush(true));
 window.addEventListener('blur',()=>usageTracker?.flush(true));
 setInterval(()=>usageTracker?.sample(),1000);
 async function boot(){
-  const requested=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin'].includes(requested))currentView=requested;
+  const requested=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin','integrations'].includes(requested))currentView=requested;
   needsSetup=location.pathname==='/signup';
   if(new URLSearchParams(location.search).get('demo')==='1'){startDemo();return;}
   try{

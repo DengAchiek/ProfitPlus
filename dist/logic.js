@@ -3,7 +3,7 @@
   const kinds = ['customers', 'leads', 'quotes', 'invoices', 'payments', 'expenses'];
   const leadStatuses = ['new', 'contacted', 'quoted', 'won', 'lost'];
   const quoteStatuses = ['draft', 'sent', 'accepted', 'declined', 'expired'];
-  const channels = ['WhatsApp', 'Email', 'Instagram', 'Phone', 'Website', 'Other'];
+  const channels = ['WhatsApp', 'Email', 'Instagram', 'Facebook', 'Phone', 'Website', 'Other'];
   const currencies = [...Intl.supportedValuesOf('currency'),'CLF'].sort().filter(code => !['XXX','XTS','XAU','XAG','XPD','XPT'].includes(code));
   const currencySet = new Set(currencies), precisionCache = new Map();
   function currency(code = 'KES') {
@@ -101,6 +101,12 @@
       out.firstContactedAt = date(input.firstContactedAt, 'First response', true);
       if (out.firstContactedAt && (Date.parse(out.firstContactedAt) > now + 60000 || Date.parse(out.firstContactedAt) < Date.parse(receivedAt))) throw Error('First response must be after receipt and cannot be in the future.');
       if (out.status === 'lost' && !out.lostReason) throw Error('Add a reason for the lost enquiry.');
+      if(input.captured){
+        const source=input.captured;if(typeof source!=='object'||Array.isArray(source))throw Error('Invalid captured source.');
+        out.captured={provider:choice(source.provider,['facebook','instagram','twilio','website'],'capture provider'),type:choice(source.type,['message','call','form'],'interaction type'),capturedAt:date(source.capturedAt,'Capture time')};
+        for(const key of ['connectionId','eventId','senderId','accountId','accountName','name','handle','email','phone','pageURL','referrer','campaign','callStatus'])out.captured[key]=text(source[key]??'',key,['pageURL','referrer'].includes(key)?2000:500,false);
+        out.captured.callDuration=source.callDuration==null||source.callDuration===''?null:Number(source.callDuration);if(out.captured.callDuration!==null&&(!Number.isFinite(out.captured.callDuration)||out.captured.callDuration<0||out.captured.callDuration>86400))throw Error('Invalid call duration.');
+      }
     } else if (kind === 'quotes') {
       out = { ...pricing(input), customerId: ref(input.customerId, 'Customer'), leadId: ref(input.leadId, 'Enquiry', true),
         issuedOn: day(input.issuedOn, 'Issue date'), expiresOn: day(input.expiresOn, 'Expiry date'),

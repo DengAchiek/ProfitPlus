@@ -8,8 +8,9 @@ const { Billing } = require('./lib/billing');
 const { documentPdf } = require('./lib/pdf');
 const { Analytics } = require('./lib/analytics');
 const { AdminSetup } = require('./lib/admin-setup');
+const { Channels, formHeaders } = require('./lib/channels');
 const LIMIT = 50 * 1024 * 1024;
-const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/admin/setup':'admin-setup.html', '/admin-setup.js':'admin-setup.js', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
+const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/admin/setup':'admin-setup.html', '/admin-setup.js':'admin-setup.js', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/connections.js':'connections.js', '/capture.js':'capture.js', '/enquire':'enquire.html', '/enquire.js':'enquire.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
 
 function createApplication(options = {}) {
   const backupLimit = options.backupLimit || LIMIT;
@@ -19,6 +20,7 @@ function createApplication(options = {}) {
   const logger = options.logger || console;
   const analytics = new Analytics(store, { adminEmails: options.adminEmails ?? process.env.PLATFORM_ADMIN_EMAILS, adminEmailHashes:options.adminEmailHashes ?? process.env.PLATFORM_ADMIN_EMAIL_SHA256, now: options.analyticsNow });
   const adminSetup=new AdminSetup(store,analytics,options.adminSetup||{tokenHash:process.env.PLATFORM_ADMIN_SETUP_TOKEN_SHA256,emailHash:process.env.PLATFORM_ADMIN_SETUP_EMAIL_SHA256,expiresAt:process.env.PLATFORM_ADMIN_SETUP_EXPIRES_AT,mode:process.env.PLATFORM_ADMIN_SETUP_MODE},options.analyticsNow);
+  const channels=new Channels(store,analytics,{...options.channels,publicOrigin,meta:options.channels?.meta||{appId:process.env.META_APP_ID,appSecret:process.env.META_APP_SECRET,version:process.env.META_API_VERSION}});
   const measure = callback => { try { return callback(); } catch (error) { logger.error('Analytics measurement failed:', error.message); } };
   if(publicOrigin){const parsed=new URL(publicOrigin);if(parsed.origin!==publicOrigin||!['https:','http:'].includes(parsed.protocol))throw Error('PUBLIC_ORIGIN must be an exact HTTP(S) origin without a path or trailing slash.');}
   if (production && (!publicOrigin || !publicOrigin.startsWith('https://'))) throw Error('Set PUBLIC_ORIGIN to the HTTPS address of this deployment.');
@@ -42,6 +44,7 @@ function createApplication(options = {}) {
     for await (const chunk of req) { size += chunk.length; if (size > limit) throw new AppError(413, 'Request is too large. Maximum size is ' + (limit >= 1024 * 1024 ? limit / (1024 * 1024) + ' MB.' : Math.floor(limit / 1024) + ' KB.')); chunks.push(chunk); }
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new AppError(400, 'Invalid JSON.'); }
   }
+  async function rawBody(req,limit=512000){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>limit)throw new AppError(413,'Request is too large.');chunks.push(chunk);}return Buffer.concat(chunks);}
   function guardOrigin(req) {
     const expected = publicOrigin || 'http://' + req.headers.host;
     if (req.headers.origin !== expected) throw new AppError(403, 'Request origin is not allowed.');
@@ -62,14 +65,36 @@ function createApplication(options = {}) {
       const url = new URL(req.url, 'http://localhost');
       const route = url.pathname;
       measuredPath = route;
+      channels.origin ||= publicOrigin||'http://'+req.headers.host;
       if (!route.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(req.method)) return json(res, 405, { error: 'Method not allowed.' });
         const files = STATIC_FILES;
         if (!files[route]) return json(res, 404, { error: 'Not found.' });
         const file = files[route], type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
         const bytes = req.method === 'HEAD' ? '' : fs.readFileSync(path.join(__dirname, 'dist', file));
-        res.writeHead(200, { ...securityHeaders, 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-cache' });
+        const pageHeaders=route==='/enquire'?formHeaders(securityHeaders,[channels.siteInfo(url.searchParams.get('site')).websiteOrigin]):securityHeaders;
+        res.writeHead(200, { ...pageHeaders, 'Content-Type': type + '; charset=utf-8', 'Cache-Control':route==='/enquire'?'no-store':'no-cache' });
         return res.end(bytes);
+      }
+      if(route==='/api/channel-webhooks/meta'&&req.method==='GET'){const challenge=channels.verifyMeta(Object.fromEntries(url.searchParams));res.writeHead(200,{...securityHeaders,'Content-Type':'text/plain','Cache-Control':'no-store'});return res.end(challenge);}
+      if(route==='/api/channel-webhooks/meta'&&req.method==='POST')return json(res,200,await channels.metaWebhook(await rawBody(req),req.headers['x-hub-signature-256']));
+      const callWebhook=route.match(/^\/api\/channel-webhooks\/twilio\/([\w-]+)$/);
+      if(callWebhook&&req.method==='POST'){
+        if(!String(req.headers['content-type']||'').startsWith('application/x-www-form-urlencoded'))throw new AppError(415,'Use a form-encoded call callback.');
+        const params={};for(const [key,value]of new URLSearchParams((await rawBody(req,64000)).toString('utf8')))params[key]=params[key]===undefined?value:Array.isArray(params[key])?[...params[key],value]:[params[key],value];
+        const exactURL=String(req.url).startsWith(channels.origin+'/')?req.url:channels.origin+req.url;
+        channels.twilioWebhook(callWebhook[1],params,req.headers['x-twilio-signature'],exactURL);res.writeHead(204,securityHeaders);return res.end();
+      }
+      const intake=route.match(/^\/api\/capture\/([\w-]+)\/(info|visit|enquiry)$/);
+      if(intake){const [,id,action]=intake;
+        if(action==='info'&&req.method==='GET')return json(res,200,{...channels.siteInfo(id),nonce:channels.formNonce(id)});
+        if(action==='visit'){
+          const info=channels.siteInfo(id);if(req.headers.origin!==info.websiteOrigin)throw new AppError(403,'This website is not allowed.');
+          const cors={'Access-Control-Allow-Origin':info.websiteOrigin,'Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Vary':'Origin'};
+          if(req.method==='OPTIONS'){res.writeHead(204,{...securityHeaders,...cors,'Cache-Control':'no-store'});return res.end();}
+          if(req.method==='POST'){channels.visit(id,await body(req,10000),req.headers.origin,req.socket.remoteAddress);res.writeHead(204,{...securityHeaders,...cors,'Cache-Control':'no-store'});return res.end();}
+        }
+        if(action==='enquiry'&&req.method==='POST')return json(res,202,channels.websiteEnquiry(id,await body(req,15000),req.headers.origin,req.socket.remoteAddress));
       }
       if(route==='/api/billing/webhook' && req.method==='POST'){
         const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>1000000)throw new AppError(413,'Webhook too large.');chunks.push(chunk);}
@@ -107,13 +132,26 @@ function createApplication(options = {}) {
       measuredUser = user;
       if (route.startsWith('/api/admin/')) {
         analytics.requireAdmin(user);
+        if(route==='/api/admin/channel-settings'&&req.method==='GET')return json(res,200,channels.adminConfig(user));
+        if(route==='/api/admin/channel-settings'&&req.method==='PUT')return json(res,200,channels.saveAdminConfig(user,await body(req,10000)));
         if (route === '/api/admin/dashboard' && req.method === 'GET') return json(res,200,analytics.dashboard(user,url.searchParams.get('days')));
         if (route === '/api/admin/users' && req.method === 'GET') return json(res,200,analytics.users(user,Object.fromEntries(url.searchParams)));
         if (/^\/api\/admin\/users\/[^/]+$/.test(route) && req.method === 'GET') return json(res,200,analytics.profile(user,route.split('/')[4],url.searchParams.get('days')));
         return json(res,404,{error:'Endpoint not found.'});
       }
       if (route === '/api/telemetry' && req.method === 'POST') return json(res,200,analytics.heartbeat(user,await body(req,4096)));
-      if (route === '/api/bootstrap' && req.method === 'GET') return json(res, 200, { user: publicUser(user), platformAdmin:analytics.isAdmin(user), csrf: user.csrf, business: store.business(user), records: store.records(user), users: store.users(user), activity: store.activity(user), subscription:store.subscription(user), backupStatus: user.role === 'owner' ? store.backupStatus : null });
+      if (route === '/api/bootstrap' && req.method === 'GET') {channels.drain(user.business_id);return json(res, 200, { user: publicUser(user), platformAdmin:analytics.isAdmin(user), csrf: user.csrf, business: store.business(user), records: store.records(user), users: store.users(user), activity: store.activity(user), captureStatus:channels.summary(user),subscription:store.subscription(user), backupStatus: user.role === 'owner' ? store.backupStatus : null });}
+      if(route==='/api/integrations'&&req.method==='GET')return json(res,200,channels.list(user));
+      if(route==='/api/integrations/website'&&req.method==='POST')return json(res,201,channels.website(user,await body(req,10000)));
+      if(route==='/api/integrations/twilio'&&req.method==='POST')return json(res,201,await channels.twilio(user,await body(req,10000)));
+      if(route==='/api/integrations/meta/start'&&req.method==='POST')return json(res,200,channels.startMeta(user,(await body(req)).provider));
+      if(route==='/api/integrations/meta/connect'&&req.method==='POST')return json(res,201,await channels.connectMeta(user,(await body(req)).assetId));
+      if(route==='/api/integrations/oauth/callback'&&req.method==='GET'){
+        let result='connected';try{await channels.finishMeta(user,Object.fromEntries(url.searchParams));}catch(error){result=error.status===422?'no_accounts':'failed';}
+        res.writeHead(302,{...securityHeaders,'Cache-Control':'no-store',Location:'/app?channel='+result+'#integrations'});return res.end();
+      }
+      const disconnect=route.match(/^\/api\/integrations\/([\w-]+)\/disconnect$/);if(disconnect&&req.method==='POST')return json(res,200,await channels.disconnect(user,disconnect[1]));
+      const retry=route.match(/^\/api\/integrations\/events\/([\w-]+)\/retry$/);if(retry&&req.method==='POST')return json(res,200,channels.retry(user,retry[1],(await body(req)).customerId));
       if(route==='/api/billing'&&req.method==='GET'){store.owner(user);return json(res,200,{subscription:store.subscription(user),catalog:await billing.catalog(),pendingCheckout:!!store.subscriptionRow(user).checkout_key});}
       if(route==='/api/billing/checkout'&&req.method==='POST')return json(res,200,await billing.checkout(user,await body(req)));
       if(route==='/api/billing/portal'&&req.method==='POST')return json(res,200,await billing.portal(user));
@@ -156,7 +194,7 @@ function createApplication(options = {}) {
           res.writeHead(200, { ...securityHeaders, 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + record.number.replace(/[^\w-]/g, '_') + '.pdf"' });
           return res.end(bytes);
         }
-        if (!action && !id && req.method === 'POST') return json(res, 201, store.saveRecord(user, kind, await body(req)));
+        if (!action && !id && req.method === 'POST') {if(kind==='leads')throw new AppError(403,'Enquiries are captured from connected customer channels. Open Connections to collect them.');return json(res, 201, store.saveRecord(user, kind, await body(req)));}
         if (!action && id && req.method === 'PUT') { const input = await body(req); return json(res, 200, store.saveRecord(user, kind, input.record, id, input.version)); }
         if (!action && id && req.method === 'GET') return json(res, 200, store.get(user, kind, id));
       }
@@ -173,7 +211,7 @@ function createApplication(options = {}) {
   const server = http.createServer(handleRequest);
   let timer;
   if (options.startTimers !== false) { store.automaticBackup(); timer = setInterval(() => store.automaticBackup(), 60 * 60000); timer.unref(); }
-  return { server, store, billing, analytics, adminSetup, handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
+  return { server, store, billing, analytics, adminSetup, channels,handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve));await Promise.allSettled([...channels.tasks]);while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
 }
 if (require.main === module) {
   const app = createApplication();

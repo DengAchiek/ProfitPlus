@@ -201,4 +201,21 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:recoveryCode})).status,403);
     assert.equal((await request('/api/admin/dashboard','GET',null,recoveredSession)).status,200);
   });
+  await t.test('connected website intake, framing policy, tenant isolation and duplicate ledger survive a Worker restart',async()=>{
+    const connected=await request('/api/integrations/website','POST',{websiteOrigin:'https://worker-client.example.test',label:'Worker website',visitsEnabled:true},owner);
+    assert.equal(connected.status,201,await connected.clone().text());const connection=await connected.json();
+    const info=await(await request('/api/capture/'+connection.id+'/info')).json();
+    const form=await request('/enquire?site='+connection.id);assert.equal(form.status,200);assert.equal(form.headers.get('x-frame-options'),null);assert.match(form.headers.get('content-security-policy'),/frame-ancestors https:\/\/worker-client.example.test/);
+    const input={name:'Worker inbound customer',email:'inbound@example.test',message:'Please send a service quotation.',submissionId:'worker-submission',nonce:info.nonce,pageURL:'https://worker-client.example.test/contact'};
+    assert.equal((await request('/api/records/leads','POST',input,owner)).status,403);
+    assert.equal((await request('/api/capture/'+connection.id+'/enquiry','POST',input)).status,202);
+    let boot=await(await request('/api/bootstrap','GET',null,owner)).json();const captured=boot.records.leads.find(l=>l.captured?.eventId===input.submissionId);assert.ok(captured);assert.equal(captured.channel,'Website');assert.equal(captured.captured.email,input.email);
+    assert.equal((await(await request('/api/bootstrap','GET',null,other)).json()).records.leads.length,0);
+    assert.equal((await request('/api/records/leads/'+captured.id,'PUT',{record:{...captured,message:'Altered'},version:captured.version},owner)).status,422);
+    const visit=await request('/api/capture/'+connection.id+'/visit','POST',{}, {}, {Origin:'https://worker-client.example.test'});assert.equal(visit.status,204);assert.equal(visit.headers.get('access-control-allow-origin'),'https://worker-client.example.test');
+    await worker.stop();worker=await start();
+    assert.equal((await request('/api/capture/'+connection.id+'/enquiry','POST',input)).status,202);
+    boot=await(await request('/api/bootstrap','GET',null,owner)).json();assert.equal(boot.records.leads.filter(l=>l.captured?.eventId===input.submissionId).length,1);
+    const connections=await(await request('/api/integrations','GET',null,owner)).json();assert.equal(connections.websiteVisits[0].views,1);assert.equal(connections.connections[0].status,'connected');
+  });
 });
