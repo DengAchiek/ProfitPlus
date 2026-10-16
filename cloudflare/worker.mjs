@@ -31,6 +31,7 @@ export class ProfitPulseDatabase extends DurableObject {
       attempts: loginAttempts(this.store.db),
       adminEmails: env.PLATFORM_ADMIN_EMAILS || '',
       adminEmailHashes: env.PLATFORM_ADMIN_EMAIL_SHA256 || '',
+      adminSetup:{tokenHash:env.PLATFORM_ADMIN_SETUP_TOKEN_SHA256,emailHash:env.PLATFORM_ADMIN_SETUP_EMAIL_SHA256,expiresAt:env.PLATFORM_ADMIN_SETUP_EXPIRES_AT},
       pdfFonts: { regular: Buffer.from(regularFont), bold: Buffer.from(boldFont) },
       billing: {
         stripe: env.STRIPE_SECRET_KEY ? new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2, timeout: 20000 }) : null,

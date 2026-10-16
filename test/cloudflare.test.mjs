@@ -14,7 +14,7 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
   const start = (vars = {}) => unstable_dev('cloudflare/worker.mjs', {
     config: 'wrangler.jsonc', ip: '127.0.0.1', port: 0, local: true,
     persist: true, persistTo: dir, logLevel: 'error',
-    vars: { PUBLIC_ORIGIN: origin, PLATFORM_ADMIN_EMAILS:'', PLATFORM_ADMIN_EMAIL_SHA256:adminEmails?createHash('sha256').update(adminEmails).digest('hex'):'', ...vars },
+    vars: { PUBLIC_ORIGIN: origin, PLATFORM_ADMIN_EMAILS:'', PLATFORM_ADMIN_EMAIL_SHA256:adminEmails?createHash('sha256').update(adminEmails).digest('hex'):'', PLATFORM_ADMIN_SETUP_TOKEN_SHA256:'',PLATFORM_ADMIN_SETUP_EMAIL_SHA256:'',PLATFORM_ADMIN_SETUP_EXPIRES_AT:'', ...vars },
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false },
   });
   let worker = await start();
@@ -163,5 +163,24 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const signature = new Stripe('sk_test_synthetic').webhooks.generateTestHeaderString({ payload: JSON.stringify(payload), secret });
     const response = await request('/api/billing/webhook', 'POST', payload, {}, { 'Stripe-Signature': signature });
     assert.equal(response.status, 200, await response.clone().text()); assert.deepEqual(await response.json(), { ignored: true });
+  });
+  await t.test('an unregistered reserved admin can claim an expiring invitation once, across restarts',async()=>{
+    const target='setup-admin@example.test',code='c3'.repeat(32),hash=value=>createHash('sha256').update(value).digest('hex');
+    const vars={PLATFORM_ADMIN_EMAIL_SHA256:hash(target),PLATFORM_ADMIN_SETUP_EMAIL_SHA256:hash(target),PLATFORM_ADMIN_SETUP_TOKEN_SHA256:hash(code),PLATFORM_ADMIN_SETUP_EXPIRES_AT:new Date(Date.now()+3600000).toISOString()};
+    await worker.stop();worker=await start(vars);
+    assert.equal((await request('/admin/setup')).status,200);
+    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:true});
+    const input={name:'Invited administrator',email:target,password:'synthetic-invited-password',setupCode:code};
+    assert.equal((await request('/api/register','POST',{...input,businessName:'Blocked claim'})).status,422);
+    assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:'d4'.repeat(32)})).status,403);
+    const response=await request('/api/admin-setup','POST',input);assert.equal(response.status,201,await response.clone().text());
+    const session={cookie:response.headers.get('set-cookie').split(';')[0],...(await response.json())};
+    assert.equal((await(await request('/api/bootstrap','GET',null,session)).json()).platformAdmin,true);
+    assert.equal((await request('/api/admin/dashboard','GET',null,session)).status,200);
+    assert.equal((await request('/api/admin/dashboard','GET',null,owner)).status,403);
+    await worker.stop();worker=await start(vars);
+    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false});
+    assert.equal((await request('/api/admin-setup','POST',input)).status,403);
+    assert.equal((await request('/api/admin/dashboard','GET',null,session)).status,200);
   });
 });

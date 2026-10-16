@@ -7,8 +7,9 @@ const D = require('./dist/logic');
 const { Billing } = require('./lib/billing');
 const { documentPdf } = require('./lib/pdf');
 const { Analytics } = require('./lib/analytics');
+const { AdminSetup } = require('./lib/admin-setup');
 const LIMIT = 50 * 1024 * 1024;
-const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
+const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/admin/setup':'admin-setup.html', '/admin-setup.js':'admin-setup.js', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
 
 function createApplication(options = {}) {
   const backupLimit = options.backupLimit || LIMIT;
@@ -17,6 +18,7 @@ function createApplication(options = {}) {
   const publicOrigin = options.publicOrigin || process.env.PUBLIC_ORIGIN;
   const logger = options.logger || console;
   const analytics = new Analytics(store, { adminEmails: options.adminEmails ?? process.env.PLATFORM_ADMIN_EMAILS, adminEmailHashes:options.adminEmailHashes ?? process.env.PLATFORM_ADMIN_EMAIL_SHA256, now: options.analyticsNow });
+  const adminSetup=new AdminSetup(store,analytics,options.adminSetup||{tokenHash:process.env.PLATFORM_ADMIN_SETUP_TOKEN_SHA256,emailHash:process.env.PLATFORM_ADMIN_SETUP_EMAIL_SHA256,expiresAt:process.env.PLATFORM_ADMIN_SETUP_EXPIRES_AT},options.analyticsNow);
   const measure = callback => { try { return callback(); } catch (error) { logger.error('Analytics measurement failed:', error.message); } };
   if(publicOrigin){const parsed=new URL(publicOrigin);if(parsed.origin!==publicOrigin||!['https:','http:'].includes(parsed.protocol))throw Error('PUBLIC_ORIGIN must be an exact HTTP(S) origin without a path or trailing slash.');}
   if (production && (!publicOrigin || !publicOrigin.startsWith('https://'))) throw Error('Set PUBLIC_ORIGIN to the HTTPS address of this deployment.');
@@ -74,6 +76,16 @@ function createApplication(options = {}) {
         try{return json(res,200,await billing.webhook(Buffer.concat(chunks),req.headers['stripe-signature']));}catch(error){if(!error.status)throw new AppError(503,'Billing synchronization is temporarily unavailable.');throw error;}
       }
       if (!['GET', 'HEAD'].includes(req.method)) guardOrigin(req);
+      if(route==='/api/admin-setup/status'&&req.method==='GET')return json(res,200,{available:!!adminSetup.available()});
+      if(route==='/api/admin-setup'&&req.method==='POST'){
+        const key='admin-setup:'+req.socket.remoteAddress;
+        let attempt=attempts.get(key);
+        if(!attempt||attempt.reset<=Date.now())attempt={count:0,reset:Date.now()+15*60000};
+        if(attempt.count>=5)throw new AppError(429,'Too many setup attempts. Try again in 15 minutes.');
+        attempt.count++;attempts.set(key,attempt);
+        const user=adminSetup.claim(await body(req,10000)),session=store.session(user);attempts.delete(key);
+        return json(res,201,{user:session.user,csrf:session.csrf},{'Set-Cookie':cookie(session.token)});
+      }
       if(route==='/api/plans'&&req.method==='GET')return json(res,200,await billing.catalog());
       if (route === '/api/status' && req.method === 'GET') return json(res, 200, { needsSetup: store.needsSetup() });
       if (['/api/setup', '/api/register', '/api/login'].includes(route) && req.method === 'POST') {
@@ -161,7 +173,7 @@ function createApplication(options = {}) {
   const server = http.createServer(handleRequest);
   let timer;
   if (options.startTimers !== false) { store.automaticBackup(); timer = setInterval(() => store.automaticBackup(), 60 * 60000); timer.unref(); }
-  return { server, store, billing, analytics, handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
+  return { server, store, billing, analytics, adminSetup, handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve)); while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
 }
 if (require.main === module) {
   const app = createApplication();
