@@ -12,3 +12,19 @@ test('the actual report and CSV functions isolate mixed-currency records and exp
  const csv=context.captured.data;assert.match(csv,/"Issued","Currency","Channel"/);assert.match(csv,/"INV-KWD"/);assert.match(csv,/"KWD"/);assert.match(csv,/10\.123/);assert.doesNotMatch(csv,/INV-USD|INV-JPY/);assert.equal(csv.split('\r\n').length,2);
  const data=vm.runInContext('reportData()',context);assert.equal(data.payments,10.123);assert.equal(data.summaries.length,1);
 });
+test('direct invoices contribute to reports and CSV without a source quotation',()=>{
+ const records=Object.fromEntries(D.kinds.map(k=>[k,[]]));
+ for(const currency of ['KES','KWD']){
+  const customer={id:'direct-c-'+currency,name:currency+' Customer'},invoice={...D.validateRecord('invoices',{customerId:customer.id,currency,quote:{currency,items:[{description:'Direct service',quantity:1,unitPrice:100,unitCost:0}]},issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'completed',costsFinalized:true}),id:'direct-i-'+currency,number:'INV-DIRECT-'+currency};
+  records.customers.push(customer);records.invoices.push(invoice);
+  records.payments.push({id:'direct-p-'+currency,invoiceId:invoice.id,currency,amount:40,fee:1,direction:'receipt',paidOn:'2026-10-16'});
+  records.expenses.push({id:'direct-e-'+currency,invoiceId:invoice.id,currency,amount:20,incurredOn:'2026-10-16'});
+ }
+ const source=fs.readFileSync(path.join(__dirname,'../dist/app.js'),'utf8'),context=vm.createContext({Pulse:D,Intl,Date,fixture:{records,users:[],business:{currency:'KES',locale:'en-US',timezone:'UTC'}},captured:null});
+ vm.runInContext(source.slice(0,source.indexOf("document.addEventListener('click'")),context);
+ vm.runInContext("model=fixture;filters={currency:'KES',query:'',channel:'',from:'',to:''};download=(data,name,type)=>{captured={data,name,type};};exportReport();",context);
+ const data=vm.runInContext('reportData()',context);
+ assert.equal(data.invoices.length,1);assert.equal(data.invoices[0].quoteId,null);assert.equal(data.summaries[0].balance,60);assert.equal(data.summaries[0].actualProfit,79);
+ assert.equal(data.channels[0][0],'Unattributed');assert.equal(data.channels[0][1],100);assert.equal(data.decisions.length,0);
+ assert.match(context.captured.data,/INV-DIRECT-KES/);assert.doesNotMatch(context.captured.data,/INV-DIRECT-KWD/);
+});

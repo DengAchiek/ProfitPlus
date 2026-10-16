@@ -50,7 +50,7 @@ Cloudflare uses persistent storage and provider-managed database recovery rather
 - **Enquiries:** editable messages, channel, owner assignment, status, value, next action, scheduled follow-ups, loss reasons, configurable response target and English/Swahili keyword triage with manual priority.
 - **Replies:** editable drafts, server saving, per-account local recovery for unsaved text, a composer preserved while filtering, copy and text download. Refresh preserves active editors.
 - **Quotations:** multiple line items, fractional quantities, unit costs/prices, labour/transport/overhead, percentage discounts, configured tax, percentage and fixed fees, target margin, sequential numbers, issue/expiry dates, terms/notes, revisions, copying, statuses and downloadable PDFs.
-- **Sales:** invoices/orders created from accepted quotes, preserved pricing snapshots, due dates, deposits/final payments/refunds, actual payment fees, balances, categorized actual costs, cost finalization and completion/cancellation.
+- **Invoice generator:** create invoices directly or convert accepted quotations, with automatic invoice numbers, multiple line items, per-invoice currency, tax, discounts, due dates, payment terms, PDF downloads, and preserved pricing snapshots. Payments, refunds, balances, actual costs, and profit tracking use the same ledger for both invoice types.
 - **Reporting:** overdue follow-ups, open enquiries, quote acceptance, invoice sales before tax, payments including tax, unpaid balances, source-channel sales, expected versus actual profit, period/channel filters and CSV export.
 - **Daily work:** customer/document/message search, status/date/channel filters, sorting, pagination, responsive navigation, keyboard-accessible backup/restore, archiving and restoration of all record types.
 
@@ -60,12 +60,24 @@ Cloudflare uses persistent storage and provider-managed database recovery rather
 2. Add their enquiry, assign it and set a follow-up date.
 3. Use **Create quote** on the enquiry. Enter items, expected costs, tax and terms.
 4. Save as draft/sent, export the PDF and share it through your chosen channel.
-5. Mark an accepted quote accepted and use **Create invoice / order**.
+5. Mark an accepted quote accepted and use **Create invoice / order**, or open **Invoices & payments → Create invoice** to invoice a customer directly.
 6. Record money already received, refunds and actual transaction fees.
 7. Record actual fulfilment costs. Complete the order and confirm all costs are recorded.
 8. Review balances, follow-ups and estimated versus actual profit in Overview and Reports.
 
 Channels are manual categories. Reply copy/download and payment entry do not send messages or transfer money. External inbox connections, push/email notifications and live payment integrations require separate provider configuration. Reminders appear in the open application's overdue list and navigation badge.
+
+## Invoice generator
+
+Sign in and open **Invoices & payments**. Add a customer first if your workspace is empty. Business contact details and default payment terms are configured in **Settings & backups** and appear on generated PDFs.
+
+1. Choose **Create invoice** to select a customer and currency, enter line items, issue/due dates, tax, discounts, notes, and payment terms. The editor shows the total and estimated margin before saving. Internal unit costs and margin calculations are excluded from the customer PDF.
+2. Choose **From quotation** to select an accepted quotation that has not already been invoiced. Review its customer, currency, items, and total, then set the invoice dates, notes, and terms. Quotation details also retain their **Create invoice / order** shortcut.
+3. Save the invoice to receive a server-generated `INV-` number, then choose **Download invoice PDF**. Record receipts, refunds, and actual fulfilment costs from the invoice detail panel. Payment entries record money already received; they do not transfer funds.
+
+Saved invoice amounts, currency, customer, and quotation link are fixed. Dates, notes, payment terms, and order status remain editable, with an audit history and stale-edit checks. To replace incorrect amounts, cancel an unpaid invoice and create a corrected one; received payments must be refunded before cancellation. Standalone invoices appear as **Direct invoice** and use **Unattributed** for source-channel reporting.
+
+Both paths use the existing authenticated record API, plan document quotas, currency calculations, PDF renderer, and persistent database. A direct invoice has a null `quoteId` and its own validated pricing snapshot; quotation-based invoices copy trusted pricing from the stored accepted quote. Backup restore supports multiple direct invoices while still rejecting duplicate active invoices for one quotation. Existing records require no schema migration.
 
 ## Financial definitions
 

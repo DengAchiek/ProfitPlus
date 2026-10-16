@@ -23,7 +23,7 @@ const plusDays = (date, n) => new Date(Date.parse(date + 'T12:00:00Z') + n * 864
 function localTime(value) { const d = new Date(value || Date.now()); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0,16); }
 function when(value) { return value ? new Intl.DateTimeFormat(model.business.locale || 'en-US',{ timeZone:model.business.timezone || 'UTC', dateStyle:'medium', timeStyle:'short' }).format(new Date(value)) : 'No date'; }
 function pill(text, type = text) { return '<span class="pill ' + esc(type) + '">' + esc(cap(text)) + '</span>'; }
-function button(action, text, id = '', kind = '', cls = '') { const locked=!demo&&model.subscription&&!model.subscription.canWrite&&['new','edit','archive','restoreRecord','quoteFromLead','quoteFromCustomer','leadFromCustomer','acceptQuote','duplicateQuote','invoiceFromQuote','payment','expense','draft','saveDraft','confirmImport'].includes(action); return '<button '+(locked?'disabled title="Open Subscription to continue editing" ':'')+'type="button" class="' + esc(cls) + '" data-action="' + action + '" data-id="' + esc(id) + '" data-kind="' + esc(kind) + '">' + text + '</button>'; }
+function button(action, text, id = '', kind = '', cls = '') { const locked=!demo&&model.subscription&&!model.subscription.canWrite&&['new','edit','archive','restoreRecord','quoteFromLead','quoteFromCustomer','leadFromCustomer','acceptQuote','duplicateQuote','invoiceFromQuote','invoiceFromCustomer','payment','expense','draft','saveDraft','confirmImport'].includes(action); return '<button '+(locked?'disabled title="Open Subscription to continue editing" ':'')+'type="button" class="' + esc(cls) + '" data-action="' + action + '" data-id="' + esc(id) + '" data-kind="' + esc(kind) + '">' + text + '</button>'; }
 function showToast(message, undo) {
   clearTimeout(toastTimer); $('toast').hidden = false; $('toast').textContent = message;
   if (undo) { const b = document.createElement('button'); b.textContent = 'Undo'; b.onclick = () => undo().catch(handleError); $('toast').append(b); }
@@ -156,17 +156,17 @@ function overview() {
     (overdue.length ? overdue.slice(0,5).map(l => '<div class="timeline-row"><span class="timeline-dot"></span><div class="full"><strong>' + esc(customer(l.customerId).name) + '</strong><small>' + esc(l.nextActionAt ? 'Follow-up due ' + when(l.nextActionAt) : 'Waiting since ' + when(l.receivedAt)) + ' · ' + esc(member(l.assignedTo)) + '</small></div>' + button('edit','Follow up',l.id,'leads') + '</div>').join('') : empty('You’re up to date.','Overdue enquiries and scheduled follow-ups will appear here.')) + '</section>' +
     '<section class="card"><div class="card-head"><h2>Recent activity</h2><span class="small">A shared history</span></div>' +
     (model.activity.length ? model.activity.slice(0,5).map(a => '<div class="timeline-row"><span class="timeline-dot"></span><div><strong>' + esc(a.userName) + '</strong> ' + esc(a.action) + ' ' + esc(a.kind) + '<small>' + when(a.occurredAt) + '</small></div></div>').join('') : empty('Your story starts here.','Add your first customer to begin.')) + '</section></div>' +
-    '<section class="card"><div class="card-head"><h2>Open sales & payments</h2>' + button('go','All sales →','','invoices','quiet') + '</div>' + (invoices.length ? invoiceTable(invoices.slice(0,5)) : empty('From quote to payment.','Accept a quotation, then create its invoice to record deposits and actual costs.',button('go','View quotations','','quotes'))) + '</section>';
+    '<section class="card"><div class="card-head"><h2>Open sales & payments</h2>' + button('go','All sales →','','invoices','quiet') + '</div>' + (invoices.length ? invoiceTable(invoices.slice(0,5)) : empty('From quote to payment.','Create an invoice directly or convert an accepted quotation to track payments and actual costs.',button('go','Create an invoice','','invoices'))) + '</section>';
 }
 function renderLeads(rows) {
   return '<div class="lead-list">' + rows.map(l => { const p = Pulse.priority(l,Date.now(),model.business.responseHours); return '<article class="lead-card" data-lead="' + esc(l.id) + '"><div class="lead-head"><div><h3>' + esc(customer(l.customerId).name) + '</h3><span class="small">' + esc(l.channel) + ' · ' + when(l.receivedAt) + '</span></div><div>' + pill(l.archived ? 'archived' : l.status) + ' <span data-priority="' + esc(l.id) + '">' + (p.high ? pill('Needs attention','high') : '') + '</span></div></div><p class="lead-message">' + esc(l.message) + '</p><div class="lead-meta"><span>' + esc(member(l.assignedTo)) + '</span><span>' + (l.value === null ? 'Value not entered' : money(l.value,l.currency) + ' potential value') + '</span><span class="due">' + (l.nextActionAt ? 'Next action: ' + when(l.nextActionAt) : 'No follow-up scheduled') + '</span></div><p class="small" data-reasons="' + esc(l.id) + '">' + esc(p.reasons.join(' · ')) + '</p><div class="actions">' + button('detail','Customer history',l.customerId,'customers') + button('edit','Edit / follow up',l.id,'leads') + button('history','Status history',l.id,'leads') + (!l.archived ? button('quoteFromLead','Create quote',l.id) + button('draft','Prepare reply',l.id) : '') + button(l.archived ? 'restoreRecord':'archive',l.archived ? 'Restore':'Archive',l.id,'leads') + '</div><div id="draft-' + esc(l.id) + '"></div></article>'; }).join('') + '</div>';
 }
 function renderList(kind) {
-  const names = {customers:['People behind your business.','Keep contact details, notes, and a complete customer history.','customer'],leads:['Every enquiry, a next step.','Capture interest, assign a follow-up, and keep conversations moving.','enquiry'],quotes:['Price with confidence.','Build professional quotes and protect your margin.','quotation'],invoices:['From accepted quote to paid.','Track orders, deposits, balances, refunds, and actual costs.','invoice']};
+  const names = {customers:['People behind your business.','Keep contact details, notes, and a complete customer history.','customer'],leads:['Every enquiry, a next step.','Capture interest, assign a follow-up, and keep conversations moving.','enquiry'],quotes:['Price with confidence.','Build professional quotes and protect your margin.','quotation'],invoices:['Professional invoices, ready to send.','Create an invoice directly or from an accepted quotation, then track payments and costs.','invoice']};
   const [title,intro,label] = names[kind], rows = filtered(kind), visible = paginate(rows);
-  const create = kind === 'invoices' ? button('go','Accept a quote →','','quotes','primary') : button('new','+ Add ' + label,'',kind,'primary');
+  const create = kind === 'invoices' ? '<div class="actions">'+button('new','+ Create invoice','','invoices','primary')+button('invoiceFromQuote','From quotation')+'</div>' : button('new','+ Add ' + label,'',kind,'primary');
   return heading(title,intro,create) + toolbar(kind) +
-    (rows.length ? (kind === 'leads' ? renderLeads(visible) : '<section class="card">' + (kind === 'customers' ? customerTable(visible) : kind === 'quotes' ? quoteTable(visible) : invoiceTable(visible)) + '</section>') : '<section class="card">' + empty('No ' + (filters.archived ? 'archived ' : '') + label + 's here.',filters.query || filters.status || filters.from || filters.to ? 'Try changing your filters.' : kind === 'customers' ? 'Start with a customer. Their enquiries, quotes, and sales stay connected.' : 'Create a customer and follow the workflow to get started.',create) + '</section>') + pagination(rows.length);
+    (rows.length ? (kind === 'leads' ? renderLeads(visible) : '<section class="card">' + (kind === 'customers' ? customerTable(visible) : kind === 'quotes' ? quoteTable(visible) : invoiceTable(visible)) + '</section>') : '<section class="card">' + empty('No ' + (filters.archived ? 'archived ' : '') + label + 's here.',filters.query || filters.status || filters.from || filters.to ? 'Try changing your filters.' : kind === 'customers' ? 'Start with a customer. Their enquiries, quotes, and sales stay connected.' : kind === 'invoices' ? 'Choose Create invoice to enter items directly, or From quotation to convert accepted work.' : 'Create a customer and follow the workflow to get started.',create) + '</section>') + pagination(rows.length);
 }
 function salesChannel(invoice) { const q = model.records.quotes.find(q => q.id === invoice.quoteId); return model.records.leads.find(l => l.id === q?.leadId)?.channel || 'Unattributed'; }
 function barChart(entries) {
@@ -193,7 +193,7 @@ function renderReports() {
     '<div class="metrics">' + metric('Net payments collected',money(r.payments),'Payments dated in the selected period',true) + metric('Unpaid invoice balances',money(sum('balance')),'Invoices issued in the selected period') + metric('Net sales before tax',money(sum('revenue')),'Active invoices issued in the period') + metric('Estimated invoice profit',money(sum('profit')),'Quote costs and expected fees') + metric('Actual completed profit',money(sum('actualProfit')),actuals.length + ' completed orders with finalized costs') + metric('Quote acceptance',r.decisions.length ? (r.decisions.filter(q => q.status === 'accepted').length/r.decisions.length*100).toFixed(1)+'%' : '—','Accepted ÷ accepted, declined, expired') + '</div>' +
     '<div class="grid"><section class="card"><h2>Sales by source channel</h2>' + (r.channels.length ? barChart(r.channels) : empty('No invoiced sales yet.','Link quotes to enquiries to attribute their source.')) + '</section><section class="card"><h2>Cash & costs</h2>' +
     [['Receipts including tax',r.receipts],['Refunds including tax',r.refunds],['Actual costs recorded',sum('actualCost')],['Actual transaction fees',sum('paymentFees')],['Finalized estimated profit',actuals.reduce((s,a)=>s+a.profit,0)],['Finalized actual profit',sum('actualProfit')]].map(([label,value])=>'<div class="stat-line"><span>'+label+'</span><strong>'+money(value)+'</strong></div>').join('') + '</section></div>' +
-    '<section class="card"><h2>Invoice detail</h2>' + (r.invoices.length ? invoiceTable(paginate(r.invoices))+pagination(r.invoices.length) : empty('No matching invoices.','Adjust the period or accept your first quote.')) + '</section><div class="report-definitions"><strong>How these numbers work.</strong> Monetary totals and quote acceptance use the selected currency. Exchange conversion is not applied.  Payment totals use payment dates and include tax; refunds subtract from receipts. Invoice sales and balances use invoice issue dates. Estimated profit excludes tax and uses entered costs plus expected fees. Actual profit excludes tax and appears only for completed orders with finalized costs; it uses recorded costs and actual payment fees. It is an order margin, not a cash balance. Quote acceptance uses recorded decisions. Archived quotes and invoices retain their financial history. Cancelled invoices are excluded from sales; archived payment and cost entries are excluded from calculations.</div>';
+    '<section class="card"><h2>Invoice detail</h2>' + (r.invoices.length ? invoiceTable(paginate(r.invoices))+pagination(r.invoices.length) : empty('No matching invoices.','Adjust the period or create your first invoice.')) + '</section><div class="report-definitions"><strong>How these numbers work.</strong> Monetary totals and quote acceptance use the selected currency. Exchange conversion is not applied.  Payment totals use payment dates and include tax; refunds subtract from receipts. Invoice sales and balances use invoice issue dates. Estimated profit excludes tax and uses entered costs plus expected fees. Actual profit excludes tax and appears only for completed orders with finalized costs; it uses recorded costs and actual payment fees. It is an order margin, not a cash balance. Quote acceptance uses recorded decisions. Archived quotes and invoices retain their financial history. Cancelled invoices are excluded from sales; archived payment and cost entries are excluded from calculations.</div>';
 }
 function renderView() {
   const renderer = currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
@@ -202,7 +202,7 @@ function renderView() {
   if(currentView==='billing'&&!demo&&model.user?.role==='owner')loadBilling();
   if(currentView==='settings'&&!demo&&model.user?.role==='owner')loadSafetyCopies();
   try{if(localStorage.getItem('profitpulse.migrated.'+model.business.id))$('legacyNotice').hidden=true;}catch{}
-  if (demo) document.querySelectorAll('[data-action="new"],[data-action="edit"],[data-action="archive"],[data-action="restoreRecord"],[data-action="quoteFromLead"],[data-action="draft"],[data-action="pdf"],[data-action="csv"]').forEach(b => b.disabled = true);
+  if (demo) document.querySelectorAll('[data-action="new"],[data-action="edit"],[data-action="archive"],[data-action="restoreRecord"],[data-action="quoteFromLead"],[data-action="invoiceFromQuote"],[data-action="invoiceFromCustomer"],[data-action="draft"],[data-action="pdf"],[data-action="csv"]').forEach(b => b.disabled = true);
 }
 function bindToolbar() {
   for (const [id,key] of [['searchInput','query'],['statusFilter','status'],['channelFilter','channel'],['fromFilter','from'],['toFilter','to'],['sortFilter','sort'],['archiveFilter','archived'],['currencyFilter','currency']]) {
@@ -228,7 +228,7 @@ function customerOptions(selected) { return [{value:'',label:'Select a customer'
 function invoiceOptions(selected) { return [{value:'',label:'Select an invoice'},...active('invoices').filter(i => i.status !== 'cancelled' || i.id === selected).map(i => ({value:i.id,label:i.number + ' · ' + customer(i.customerId).name}))]; }
 function openDialog(title, html) {
   if ($('editor').open) $('editor').close();
-  $('dialogTitle').textContent = title; $('dialogBody').innerHTML = html; formDirty = false; $('editor').showModal();
+  $('dialogTitle').textContent = title; $('dialogBody').innerHTML = html; formDirty = false; $('editor').showModal(); $('editor').scrollTop = 0;
 }
 function closeDialog() {
   if (formDirty && !confirm('Close this form without saving? Your entered changes will be discarded.')) return;
@@ -241,13 +241,33 @@ function defaultQuote(preset = {}) {
   return { currency:customer(preset.customerId).preferredCurrency || model.business.currency || 'USD', customerId:'',leadId:null,issuedOn:today(),expiresOn:plusDays(today(),14),status:'draft',
     items:[{description:'',quantity:1,unitPrice:0,unitCost:0}],labour:0,transport:0,overhead:0,discountPercent:0,taxPercent:0,feePercent:0,fixedFee:0,targetMargin:25,notes:'',terms:model.business.terms || '',...preset };
 }
+function defaultInvoice(preset = {}) {
+  const source=model.records.quotes.find(q=>q.id===preset.quoteId);
+  return {...defaultQuote(preset),quoteId:null,status:'open',dueOn:plusDays(today(),14),...preset,
+    currency:source?.currency || preset.currency || customer(preset.customerId).preferredCurrency || model.business.currency,
+    terms:source?.terms ?? preset.terms ?? model.business.terms ?? ''};
+}
+function pricingEditor(v) {
+  return '<div class="form-section"><h3>Items & services</h3><div class="line-items" id="lineItems">'+v.items.map(lineItem).join('')+'</div>'+button('addLine','+ Add line item')+'</div>'+
+    '<div class="form-section"><h3>Costs, adjustments & margin</h3><p class="small">Unit costs and margin are internal. PDFs show customer prices, tax, discounts, and payment terms.</p><div class="triple">'+
+    [['labour','Labour · total currency'],['transport','Transport · total currency'],['overhead','Overhead · total currency'],['discountPercent','Discount · %'],['taxPercent','Tax · %'],['feePercent','Transaction fee · % of total'],['fixedFee','Fixed transaction fee · currency'],['targetMargin','Target margin · %']].map(([key,label])=>field(key,label,v[key],'number','required min="0" max="'+(key.includes('Percent')||key==='targetMargin'?(key==='discountPercent'?'99.9':'99'):'1000000000')+'" step="0.01"')).join('')+'</div></div><div class="calculation" id="quoteCalculation" aria-live="polite"></div>';
+}
+function invoiceSourcePreview(record) {
+  if(!record)return '<p class="small">Select an accepted quotation to review the customer, currency, and invoice items.</p>';
+  const pricing=record.quote || record,total=Pulse.calculateQuote(pricing);
+  return '<p><strong>'+esc(customer(record.customerId).name)+'</strong> · Total including tax: <strong>'+money(total.total,total.currency)+'</strong></p>'+itemsTable(pricing);
+}
 function openForm(kind, previous = null, preset = {}) {
   ensureWritable();
-  if (['leads','quotes'].includes(kind) && !active('customers').length && !previous) { go('customers'); showToast('Add a customer first, then create their enquiry or quote.'); return; }
-  const v = previous || (kind === 'quotes' ? defaultQuote(preset) : {...preset});
+  if (['leads','quotes','invoices'].includes(kind) && !active('customers').length && !previous) { go('customers'); showToast('Add a customer first, then create their enquiry, quotation, or invoice.'); return; }
+  const v = previous || (kind === 'quotes' ? defaultQuote(preset) : kind === 'invoices' ? defaultInvoice(preset) : {...preset});
+  const fromQuote=kind==='invoices' && Boolean(v.quoteId || preset.fromQuote);
+  const editablePricing=kind==='quotes' || (kind==='invoices' && !previous && !fromQuote);
+  const availableQuotes=active('quotes').filter(q=>q.status==='accepted' && !model.records.invoices.some(i=>i.quoteId===q.id && i.status!=='cancelled'));
+  if(kind==='invoices' && fromQuote && !previous && !availableQuotes.length){go('quotes');showToast('Accept a quotation that has not already been invoiced, then create its invoice.');return;}
   v.currency=v.currency || model.records.invoices.find(i=>i.id===v.invoiceId)?.currency || customer(v.customerId).preferredCurrency || model.business.currency || 'USD';
   if(kind==='customers')v.preferredCurrency=v.preferredCurrency || model.business.currency || 'USD';
-  formContext = {kind,previous,v};
+  formContext = {kind,previous,v,fromQuote,editablePricing};
   let html = '<form id="recordForm"><div id="formError" class="error" role="alert" tabindex="-1" hidden></div>';
   if (kind === 'customers') {
     html += '<div class="pair">' + field('name','Customer name',v.name,'text','required maxlength="100"') + field('company','Company',v.company,'text','maxlength="150"') + field('phone','Phone / WhatsApp',v.phone,'tel','maxlength="50"') + field('email','Email',v.email,'email','maxlength="254"') + '</div>' + select('preferredCurrency','Preferred currency',v.preferredCurrency,currencyOptions(),true)+area('address','Address',v.address,500) + area('notes','Customer notes',v.notes);
@@ -260,15 +280,15 @@ function openForm(kind, previous = null, preset = {}) {
   } else if (kind === 'quotes') {
     const leads = model.records.leads.filter(l => l.customerId === v.customerId && !l.archived);
     html += '<div class="pair">' + select('customerId','Customer',v.customerId,customerOptions(v.customerId),true) + select('leadId','Linked enquiry',v.leadId || '',[{value:'',label:'No linked enquiry'},...leads.map(l=>({value:l.id,label:l.channel+' · '+l.message.slice(0,60)}))]) +
-      select('currency','Quote currency',v.currency,currencyOptions(),true)+field('issuedOn','Issue date',v.issuedOn,'date','required') + field('expiresOn','Valid until',v.expiresOn,'date','required') + select('status','Quote status',v.status,Pulse.quoteStatuses,true) + '</div><div class="form-section"><h3>Items & services</h3><div class="line-items" id="lineItems">' + v.items.map(lineItem).join('') + '</div>' + button('addLine','+ Add line item') + '</div>' +
-      '<div class="form-section"><h3>Costs, adjustments & margin</h3><div class="triple">' +
-      [['labour','Labour · total currency'],['transport','Transport · total currency'],['overhead','Overhead · total currency'],['discountPercent','Discount · %'],['taxPercent','Tax · %'],['feePercent','Transaction fee · % of total'],['fixedFee','Fixed transaction fee · currency'],['targetMargin','Target margin · %']].map(([key,label])=>field(key,label,v[key],'number','required min="0" max="'+(key.includes('Percent')||key==='targetMargin' ? (key==='discountPercent'?'99.9':'99'):'1000000000')+'" step="0.01"')).join('') + '</div></div><div class="calculation" id="quoteCalculation" aria-live="polite"></div>' +
+      select('currency','Quote currency',v.currency,currencyOptions(),true)+field('issuedOn','Issue date',v.issuedOn,'date','required') + field('expiresOn','Valid until',v.expiresOn,'date','required') + select('status','Quote status',v.status,Pulse.quoteStatuses,true) + '</div>' + pricingEditor(v) +
       '<div class="form-section">' + area('notes','Quote notes (included in PDF)',v.notes) + area('terms','Payment & quotation terms (included in PDF)',v.terms,3000) + '</div>';
   } else if (kind === 'invoices') {
-    html += '<div class="section-note">Invoice pricing is a snapshot of the accepted quote. Record actual expenses and transaction fees separately.</div><div class="pair">' +
-      (!previous ? select('quoteId','Accepted quotation',v.quoteId || '',[{value:'',label:'Select an accepted quote'},...active('quotes').filter(q=>q.status==='accepted').map(q=>({value:q.id,label:q.number+' · '+customer(q.customerId).name}))],true) : '') +
-      field('issuedOn','Issue date',v.issuedOn || today(),'date','required') + field('dueOn','Payment due date',v.dueOn || plusDays(today(),14),'date','required') +
-      select('status','Order status',v.status || 'open',['open','completed','cancelled'],true) + '</div><label class="checkbox"><input type="checkbox" name="costsFinalized"' + (v.costsFinalized ? ' checked' : '') + '> All actual costs have been recorded</label><p class="small">Actual profit appears when the order is completed and costs are finalized. Confirm even when actual costs are zero.</p>' + area('notes','Invoice notes (included in PDF)',v.notes);
+    html += '<div class="section-note">'+(previous?'Saved invoice amounts and customer are fixed. Update dates, terms, or order status here.':fromQuote?'The invoice inherits the accepted quotation’s customer, currency, and pricing.':'Build an invoice without a quotation. Review the items and totals before saving; saved amounts and customer are fixed.')+'</div><div class="pair">'+
+      (!previous && fromQuote?select('quoteId','Accepted quotation',v.quoteId || '',[{value:'',label:'Select an accepted quote'},...availableQuotes.map(q=>({value:q.id,label:q.number+' · '+customer(q.customerId).name}))],true):!previous?select('customerId','Customer',v.customerId || '',customerOptions(v.customerId),true)+select('currency','Invoice currency',v.currency,currencyOptions(),true):'')+
+      field('issuedOn','Issue date',v.issuedOn || today(),'date','required')+field('dueOn','Payment due date',v.dueOn || plusDays(today(),14),'date','required')+
+      select('status','Order status',v.status || 'open',['open','completed','cancelled'],true)+'</div>'+
+      (editablePricing?pricingEditor(v):'<div id="invoiceSourcePreview">'+invoiceSourcePreview(previous || model.records.quotes.find(q=>q.id===v.quoteId))+'</div>')+
+      '<label class="checkbox"><input type="checkbox" name="costsFinalized"'+(v.costsFinalized?' checked':'')+'> All actual costs have been recorded</label><p class="small">Record payments and actual costs after saving. Finalize costs and mark the order completed to report actual profit.</p>'+area('notes','Invoice notes (included in PDF)',v.notes)+area('terms','Payment terms (included in PDF)',v.terms,3000);
   } else if (kind === 'payments') {
     html += '<div class="pair">' + select('invoiceId','Invoice',v.invoiceId || '',invoiceOptions(v.invoiceId),true) + select('direction','Type',v.direction || 'receipt',['receipt','refund'],true) +
       field('amount','Amount · currency',v.amount ?? '','number','required min="0.01" max="1000000000" step="0.01"') + field('fee','Actual transaction fee · currency',v.fee ?? 0,'number','required min="0" max="1000000000" step="0.01"') +
@@ -278,28 +298,29 @@ function openForm(kind, previous = null, preset = {}) {
     html += select('invoiceId','Invoice / order',v.invoiceId || '',invoiceOptions(v.invoiceId),true) + field('description','What was the cost?',v.description,'text','required maxlength="300"') + '<div class="pair">' +
       field('amount','Actual cost · currency',v.amount ?? '','number','required min="0.01" max="1000000000" step="0.01"') + select('category','Category',v.category || 'Materials',['Materials','Labour','Transport','Overhead','Other'],true) + field('incurredOn','Cost date',v.incurredOn || today(),'date','required') + '</div>';
   }
-  html += '<div class="form-actions"><span class="small">Saved only after the server confirms.</span>' + button('cancelForm','Cancel') + '<button class="primary" type="submit">Save ' + ({customers:'customer',leads:'enquiry',quotes:'quotation',invoices:'invoice',payments:'payment',expenses:'cost'}[kind]) + '</button></div></form>';
-  openDialog((previous ? 'Edit ' : 'Add ') + ({customers:'customer',leads:'enquiry',quotes:'quotation',invoices:'invoice',payments:'payment',expenses:'actual cost'}[kind]),html);
+  html += '<div class="form-actions"><span class="small">Saved only after the server confirms.</span>' + button('cancelForm','Cancel') + '<button class="primary" type="submit">' + (kind==='invoices'&&!previous?'Create ':'Save ') + ({customers:'customer',leads:'enquiry',quotes:'quotation',invoices:'invoice',payments:'payment',expenses:'cost'}[kind]) + '</button></div></form>';
+  openDialog((previous ? 'Edit ' : kind==='invoices' ? 'Create ' : 'Add ') + ({customers:'customer',leads:'enquiry',quotes:'quotation',invoices:'invoice',payments:'payment',expenses:'actual cost'}[kind]),html);
   $('recordForm').onsubmit = submitRecord;
   const form=$('recordForm');
   const setCashCurrency=()=>{
     const code=form.elements.currency?.value || model.records.invoices.find(i=>i.id===form.elements.invoiceId?.value)?.currency || v.currency;
     form.dataset.currency=code;
     form.querySelectorAll('input').forEach(input=>{if(['unitPrice','unitCost','labour','transport','overhead','fixedFee','amount','fee','value'].includes(input.name)){input.step=Pulse.moneyStep(code);if(input.name==='amount')input.min=Pulse.moneyStep(code);const label=input.closest('label');if(label?.firstChild?.nodeType===3)label.firstChild.textContent=label.firstChild.textContent.replace(/ · (?:total )?(?:currency|[A-Z]{3})/,' · '+code);}});
-    if(kind==='quotes')updateCalculation();
+    if(editablePricing)updateCalculation();
   };
   if(form.elements.currency)form.elements.currency.onchange=()=>{form.dataset.currencyChosen='1';setCashCurrency();showToast('Currency changed. Review all entered amounts; values are not converted.');};
   if(form.elements.invoiceId)form.elements.invoiceId.onchange=setCashCurrency;
   setCashCurrency();
-  $('recordForm').addEventListener('input', () => { formDirty = true; if (kind === 'quotes') updateCalculation(); });
-  if (kind === 'quotes') {
+  $('recordForm').addEventListener('input', () => { formDirty = true; if (editablePricing) updateCalculation(); });
+  if (editablePricing) {
     $('recordForm').elements.customerId.onchange = event => {
       const el = $('recordForm').elements.leadId;
       if(!previous&&form.elements.currency&&!form.dataset.currencyChosen&&[...form.querySelectorAll('[name=unitPrice],[name=unitCost],[name=labour],[name=transport],[name=overhead],[name=fixedFee]')].every(input=>!Number(input.value))){$('recordForm').elements.currency.value=customer(event.target.value).preferredCurrency || model.business.currency;setCashCurrency();}
-      el.innerHTML = '<option value="">No linked enquiry</option>' + model.records.leads.filter(l => l.customerId === event.target.value && !l.archived).map(l=>'<option value="'+esc(l.id)+'">'+esc(l.channel+' · '+l.message.slice(0,60))+'</option>').join('');
+      if(el)el.innerHTML = '<option value="">No linked enquiry</option>' + model.records.leads.filter(l => l.customerId === event.target.value && !l.archived).map(l=>'<option value="'+esc(l.id)+'">'+esc(l.channel+' · '+l.message.slice(0,60))+'</option>').join('');
     };
     updateCalculation();
   }
+  if(kind==='invoices' && fromQuote && !previous){form.elements.quoteId.onchange=()=>{const source=model.records.quotes.find(q=>q.id===form.elements.quoteId.value);v.currency=source?.currency || model.business.currency;form.elements.terms.value=source?.terms || '';$('invoiceSourcePreview').innerHTML=invoiceSourcePreview(source);setCashCurrency();formDirty=true;};}
   if (kind === 'leads' && !previous) {
     const now = $('recordForm').elements.receivedNow, received = $('recordForm').elements.receivedAt;
     received.disabled = true; now.onchange = () => received.disabled = now.checked;
@@ -308,26 +329,26 @@ function openForm(kind, previous = null, preset = {}) {
   if (kind === 'leads') {form.elements.message.required = true;form.elements.customerId.onchange=event=>{if(!previous&&!form.dataset.currencyChosen&&!Number(form.elements.value.value)){form.elements.currency.value=customer(event.target.value).preferredCurrency || model.business.currency;setCashCurrency();}};}
 }
 function gatherForm() {
-  const {kind,previous,v} = formContext, form = $('recordForm'), data = Object.fromEntries(new FormData(form));
+  const {kind,previous,v,editablePricing} = formContext, form = $('recordForm'), data = Object.fromEntries(new FormData(form));
   if(['payments','expenses','invoices'].includes(kind))data.currency=form.dataset.currency || previous?.currency || v.currency;
-  const numberFields = kind === 'quotes' ? ['labour','transport','overhead','discountPercent','taxPercent','feePercent','fixedFee','targetMargin'] : kind === 'payments' ? ['amount','fee'] : kind === 'expenses' ? ['amount'] : [];
+  const numberFields = editablePricing ? ['labour','transport','overhead','discountPercent','taxPercent','feePercent','fixedFee','targetMargin'] : kind === 'payments' ? ['amount','fee'] : kind === 'expenses' ? ['amount'] : [];
   for (const key of numberFields) data[key] = Number(data[key]);
-  if (kind === 'quotes') data.items = [...$('lineItems').querySelectorAll('.line-item')].map(row => Object.fromEntries(['description','quantity','unitPrice','unitCost'].map(k => [k,k==='description' ? row.querySelector('[name="'+k+'"]').value : Number(row.querySelector('[name="'+k+'"]').value)])));
+  if (editablePricing) data.items = [...$('lineItems').querySelectorAll('.line-item')].map(row => Object.fromEntries(['description','quantity','unitPrice','unitCost'].map(k => [k,k==='description' ? row.querySelector('[name="'+k+'"]').value : Number(row.querySelector('[name="'+k+'"]').value)])));
   if (kind === 'leads') {
     data.receivedAt = data.receivedNow ? new Date().toISOString() : new Date(data.receivedAt).toISOString();
     data.nextActionAt = data.nextActionAt ? new Date(data.nextActionAt).toISOString() : null;
     data.value = data.value === '' ? null : Number(data.value); data.draft = previous?.draft || '';
   }
-  if (kind === 'invoices') { data.costsFinalized = form.elements.costsFinalized.checked; if (previous) {data.quoteId = previous.quoteId;data.customerId=previous.customerId;data.quote=previous.quote;data.terms=previous.terms;} }
+  if (kind === 'invoices') { data.costsFinalized = form.elements.costsFinalized.checked; if (previous) {data.quoteId = previous.quoteId;data.customerId=previous.customerId;data.quote=previous.quote;} else if(editablePricing){data.quoteId=null;data.quote=Pulse.pricing(data);} }
   data.archived = previous?.archived || false;
   return data;
 }
 function updateCalculation() {
   if (!$('quoteCalculation')) return;
   try {
-    const data = gatherForm(), r = Pulse.calculateQuote(data);
+    const data = gatherForm(), pricing=formContext.kind==='invoices'?data.quote:data, r = Pulse.calculateQuote(pricing);
     $('quoteCalculation').innerHTML = '<div class="totals"><div><small>Customer total incl. tax</small><strong>'+money(r.total,r.currency)+'</strong></div><div><small>Entered costs + expected fees</small><strong>'+money(r.cost,r.currency)+'</strong></div><div><small>Estimated profit ex. tax</small><strong class="'+(r.profit<0?'negative':'')+'">'+money(r.profit,r.currency)+'</strong></div><div><small>Estimated margin</small><strong>'+(r.margin===null?'—':r.margin.toFixed(1)+'%')+'</strong></div></div><p class="notice">' +
-      (r.recommendedRevenue === null ? 'The target margin and fee structure are unachievable. Review them.' : 'Minimum net sales before tax for your target: '+money(r.recommendedRevenue,r.currency)+'. '+(r.margin !== null && r.margin+0.00001 >= data.targetMargin ? 'This quotation meets your target.' : 'Adjust your prices to meet the target.')) +
+      (r.recommendedRevenue === null ? 'The target margin and fee structure are unachievable. Review them.' : 'Minimum net sales before tax for your target: '+money(r.recommendedRevenue,r.currency)+'. '+(r.margin !== null && r.margin+0.00001 >= pricing.targetMargin ? 'This '+(formContext.kind==='invoices'?'invoice':'quotation')+' meets your target.' : 'Adjust your prices to meet the target.')) +
       ' Tax is excluded from profit. Percentage transaction fees apply to the total including tax. Overhead is entered explicitly.</p>';
   } catch (error) { $('quoteCalculation').textContent = error.message; }
 }
@@ -336,7 +357,7 @@ async function submitRecord(event) {
   const context = formContext, submit = event.target.querySelector('[type=submit]'); submit.disabled = true; $('formError').hidden = true;
   try {
     const data = gatherForm();
-    if (context.kind !== 'invoices' || context.previous) Pulse.validateRecord(context.kind,data);
+    if (context.kind !== 'invoices' || context.previous || !context.fromQuote) Pulse.validateRecord(context.kind,data);
     const record = await saveRecord(context.kind,data,context.previous);
     formDirty = false; $('editor').close(); formContext = null; openDraft = null;
     showToast(cap(context.kind === 'leads' ? 'enquiry' : context.kind.slice(0,-1)) + ' saved.');
@@ -361,7 +382,7 @@ function openDetail(kind,id) {
   let html;
   if (kind === 'customers') {
     const leads = model.records.leads.filter(l=>l.customerId===id), quotes = model.records.quotes.filter(q=>q.customerId===id), invoices=model.records.invoices.filter(i=>i.customerId===id);
-    html = '<div class="pair"><div class="contact-detail"><strong>'+esc(r.company||r.name)+'</strong><p>'+[r.phone,r.email,r.address].filter(Boolean).map(esc).join('<br>')+'</p></div><div><p class="small">'+esc(r.notes||'No customer notes.')+'</p><div class="actions">'+button('edit','Edit customer',id,'customers')+button('leadFromCustomer','+ Enquiry',id)+button('quoteFromCustomer','+ Quote',id)+'</div></div></div><div class="form-section"><h3>Enquiries ('+leads.length+')</h3>'+
+    html = '<div class="pair"><div class="contact-detail"><strong>'+esc(r.company||r.name)+'</strong><p>'+[r.phone,r.email,r.address].filter(Boolean).map(esc).join('<br>')+'</p></div><div><p class="small">'+esc(r.notes||'No customer notes.')+'</p><div class="actions">'+button('edit','Edit customer',id,'customers')+button('leadFromCustomer','+ Enquiry',id)+button('quoteFromCustomer','+ Quote',id)+button('invoiceFromCustomer','+ Invoice',id)+'</div></div></div><div class="form-section"><h3>Enquiries ('+leads.length+')</h3>'+
       (leads.length?leads.map(l=>'<div class="timeline-row"><span class="timeline-dot"></span><div class="full"><strong>'+esc(l.channel)+' · '+esc(l.status)+'</strong><p class="small">'+esc(l.message)+'</p><small>'+when(l.receivedAt)+'</small></div>'+button('edit','Open',l.id,'leads')+'</div>').join(''):'<p class="small">No enquiries yet.</p>')+'</div><div class="form-section"><h3>Quotations</h3>'+ (quotes.length?quoteTable(quotes):'<p class="small">No quotations yet.</p>')+'</div><div class="form-section"><h3>Sales & payments</h3>'+ (invoices.length?invoiceTable(invoices):'<p class="small">No invoices yet.</p>')+'</div>';
   } else if (kind === 'quotes') {
     const totals = Pulse.calculateQuote(r), invoice = model.records.invoices.find(i=>i.quoteId===id&&i.status!=='cancelled');
@@ -369,10 +390,10 @@ function openDetail(kind,id) {
       '<div class="form-section"><p class="contact-detail small">'+esc(r.notes)+'</p><p class="contact-detail small">'+esc(r.terms)+'</p><div class="actions">'+button('edit','Edit quotation',id,'quotes')+(invoice?button('detail','Open '+esc(invoice.number),invoice.id,'invoices'):r.status==='accepted'?button('invoiceFromQuote','Create invoice / order',id,'','primary'):button('acceptQuote','Accept quotation',id,'','primary'))+'</div></div>';
   } else if (kind === 'invoices') {
     const totals = Pulse.invoiceSummary(r,model.records.payments,model.records.expenses);
-    html = '<div class="card-head"><div>'+pill(r.status)+' '+pill(totals.paymentStatus)+' <span class="small">Due '+r.dueOn+'</span></div><div class="actions">'+button('pdf','↓ PDF',id,'invoices')+button('edit','Order / cost status',id,'invoices')+button('history','Change history',id,'invoices')+'</div></div><p><strong>'+esc(customer(r.customerId).name)+'</strong> · '+button('detail','Source quote',r.quoteId,'quotes')+'</p>'+detailsMetrics(totals,true)+
+    html = '<div class="card-head"><div>'+pill(r.status)+' '+pill(totals.paymentStatus)+' <span class="small">Due '+r.dueOn+'</span></div><div class="actions">'+button('pdf','↓ Download invoice PDF',id,'invoices','primary')+button('edit','Details / status',id,'invoices')+button('history','Change history',id,'invoices')+'</div></div><p><strong>'+esc(customer(r.customerId).name)+'</strong> · '+(r.quoteId?button('detail','Source quote',r.quoteId,'quotes'):'<span class="small">Direct invoice</span>')+'</p>'+detailsMetrics(totals,true)+
       '<div class="form-section"><div class="card-head"><h2>Payments & refunds</h2>'+button('payment','+ Record payment',id,'','primary')+'</div>'+ledgerTable('payments',active('payments').filter(p=>p.invoiceId===id))+'</div>' +
       '<div class="form-section"><div class="card-head"><h2>Actual costs</h2>'+button('expense','+ Record cost',id)+'</div>'+ledgerTable('expenses',active('expenses').filter(e=>e.invoiceId===id))+'</div>' +
-      '<div class="form-section"><h3>Quoted items</h3>'+itemsTable(r.quote)+'</div><p class="small">Estimated profit: '+money(totals.profit,totals.currency)+'. '+(r.costsFinalized?'Actual costs finalized.':'Finalize costs and mark the order completed to report actual profit.')+'</p>'+button('archivedLedger','Archived payments & costs',id);
+      '<div class="form-section"><h3>Invoice items</h3>'+itemsTable(r.quote)+'</div><div class="form-section"><h3>Notes & payment terms</h3><p class="contact-detail small">'+esc(r.notes || 'No invoice notes.')+'</p><p class="contact-detail small">'+esc(r.terms || 'No payment terms.')+'</p></div><p class="small">Estimated profit: '+money(totals.profit,totals.currency)+'. '+(r.costsFinalized?'Actual costs finalized.':'Finalize costs and mark the order completed to report actual profit.')+'</p>'+button('archivedLedger','Archived payments & costs',id);
   }
   openDialog(kind==='customers'?r.name:r.number,html);
   if (demo) $('dialogBody').querySelectorAll('button').forEach(b=>{if(!['detail','history'].includes(b.dataset.action))b.disabled=true;});
@@ -513,7 +534,7 @@ document.addEventListener('click',async event=>{
     else if(action==='edit')openForm(kind,model.records[kind].find(r=>r.id===id));
     else if(action==='detail')openDetail(kind,id);
     else if(action==='cancelForm')closeDialog();
-    else if(action==='addLine'){if($('lineItems').children.length>=100)throw Error('A quote supports at most 100 items.');$('lineItems').insertAdjacentHTML('beforeend',lineItem().replaceAll('step="0.01"','step="'+Pulse.moneyStep($('recordForm').dataset.currency)+'"').replaceAll('· currency','· '+$('recordForm').dataset.currency));formDirty=true;updateCalculation();}
+    else if(action==='addLine'){if($('lineItems').children.length>=100)throw Error('A document supports at most 100 items.');$('lineItems').insertAdjacentHTML('beforeend',lineItem().replaceAll('step="0.01"','step="'+Pulse.moneyStep($('recordForm').dataset.currency)+'"').replaceAll('· currency','· '+$('recordForm').dataset.currency));formDirty=true;updateCalculation();}
     else if(action==='removeLine'){if($('lineItems').children.length===1)throw Error('Keep at least one line item.');target.closest('.line-item').remove();formDirty=true;updateCalculation();}
     else if(action==='prev'){page=Math.max(1,page-1);renderView();}
     else if(action==='next'){page++;renderView();}
@@ -522,7 +543,8 @@ document.addEventListener('click',async event=>{
     else if(action==='leadFromCustomer')openForm('leads',null,{customerId:id});
     else if(action==='duplicateQuote'){const q=model.records.quotes.find(q=>q.id===id);openForm('quotes',null,{...q,id:undefined,number:undefined,version:undefined,status:'draft',issuedOn:today(),expiresOn:plusDays(today(),14)});}
     else if(action==='acceptQuote'){const q=model.records.quotes.find(q=>q.id===id);await saveRecord('quotes',{...q,status:'accepted'},q);showToast('Quotation marked accepted.');openDetail('quotes',id);}
-    else if(action==='invoiceFromQuote')openForm('invoices',null,{quoteId:id});
+    else if(action==='invoiceFromQuote')openForm('invoices',null,{quoteId:id || null,fromQuote:true});
+    else if(action==='invoiceFromCustomer')openForm('invoices',null,{customerId:id});
     else if(action==='payment')openForm('payments',null,{invoiceId:id});
     else if(action==='expense')openForm('expenses',null,{invoiceId:id});
     else if(action==='archivedLedger')openDialog('Archived payments & costs','<h3>Payments</h3>'+ledgerTable('payments',model.records.payments.filter(p=>p.invoiceId===id&&p.archived))+'<h3>Actual costs</h3>'+ledgerTable('expenses',model.records.expenses.filter(p=>p.invoiceId===id&&p.archived)));

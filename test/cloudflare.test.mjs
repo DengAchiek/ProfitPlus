@@ -31,7 +31,7 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
   }
   const account = suffix => ({ businessName: 'Worker QA ' + suffix, name: 'Owner ' + suffix,
     email: suffix + '@example.test', password: 'synthetic-worker-password', currency: 'KES', timezone: 'Africa/Nairobi' });
-  let owner, other, staff, customer, quote;
+  let owner, other, staff, customer, quote, direct, converted;
   await t.test('root is public and application routes load without static redirects', async () => {
     for (const route of ['/', '/index.html', '/login', '/signup', '/app', '/landing.css', '/app.js']) {
       const response = await request(route);
@@ -83,6 +83,24 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const bytes = Buffer.from(await pdf.arrayBuffer());
     assert.equal(bytes.subarray(0, 5).toString(), '%PDF-'); assert.ok(bytes.length > 5000);
   });
+  await t.test('direct and quotation-based invoices share numbering, PDFs, payments and tenant protection', async () => {
+    const input={customerId:customer.id,currency:'KES',quote:{currency:'KES',items:[{description:'Direct invoice service',quantity:2,unitPrice:250,unitCost:50}],discountPercent:10,taxPercent:16},issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'open',terms:'Pay within 14 days.'};
+    const response=await request('/api/records/invoices','POST',input,owner);
+    assert.equal(response.status,201,await response.clone().text());direct=await response.json();
+    assert.equal(direct.quoteId,null);assert.equal(direct.number,'INV-00001');
+    assert.equal((await request('/api/records/invoices/'+direct.id,'GET',null,other)).status,404);
+    const pdf=await request('/api/records/invoices/'+direct.id+'/pdf','GET',null,owner);
+    assert.equal(pdf.status,200);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
+    const payment={invoiceId:direct.id,amount:222,fee:0,direction:'receipt',method:'Bank',paidOn:'2026-10-16'};
+    assert.equal((await request('/api/records/payments','POST',payment,owner)).status,201);
+    assert.equal((await request('/api/records/payments','POST',{...payment,amount:301},owner)).status,422);
+    const accepted=await request('/api/records/quotes/'+quote.id,'PUT',{record:{...quote,status:'accepted'},version:quote.version},owner);
+    assert.equal(accepted.status,200);quote=await accepted.json();
+    const conversion=await request('/api/records/invoices','POST',{quoteId:quote.id,customerId:'untrusted',currency:'USD',quote:{items:[]},issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'open'},owner);
+    assert.equal(conversion.status,201,await conversion.clone().text());converted=await conversion.json();
+    assert.equal(converted.number,'INV-00002');assert.equal(converted.currency,'KES');assert.equal(converted.customerId,customer.id);assert.equal(converted.quote.items[0].unitPrice,1000);
+    assert.equal((await request('/api/records/invoices','POST',{quoteId:quote.id,issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'open'},owner)).status,409);
+  });
   await t.test('restore safety copies are persistent and scoped to their business', async () => {
     for (let n = 0; n < 35; n++) {
       assert.equal((await request('/api/records/customers', 'POST', { name: 'Unicode customer ' + n, notes: '🧩'.repeat(2000) }, owner)).status, 201);
@@ -107,6 +125,8 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const boot = await (await request('/api/bootstrap', 'GET', null, owner)).json();
     assert.ok(boot.records.customers.some(record => record.id === customer.id));
     assert.equal(boot.records.quotes[0].id, quote.id);
+    assert.equal(boot.records.invoices.length,2);assert.ok(boot.records.invoices.some(i=>i.id===direct.id && i.quoteId===null));
+    assert.ok(boot.records.invoices.some(i=>i.id===converted.id && i.quoteId===quote.id));assert.equal(boot.records.payments[0].amount,222);
     assert.equal((await (await request('/api/backups', 'GET', null, owner)).json()).backups.length, 1);
     assert.equal((await request('/api/login', 'POST', { email: 'unknown@example.test', password: 'incorrect' }, {}, limitedIP)).status, 429);
     const login = await session(await request('/api/login', 'POST', { email: account('owner').email, password: account('owner').password }));

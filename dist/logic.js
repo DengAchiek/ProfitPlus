@@ -108,7 +108,7 @@
       if (out.expiresOn < out.issuedOn) throw Error('Expiry must be on or after the issue date.');
     } else if (kind === 'invoices') {
       if(input.currency && input.quote?.currency && input.currency!==input.quote.currency)throw Error('Invoice and pricing snapshot currencies must match.');
-      out = { currency:currency(input.currency || input.quote?.currency || 'KES'), quoteId: ref(input.quoteId, 'Quote'), customerId: ref(input.customerId, 'Customer'), quote: pricing({...input.quote, currency:input.currency || input.quote?.currency || 'KES'}),
+      out = { currency:currency(input.currency || input.quote?.currency || 'KES'), quoteId: ref(input.quoteId, 'Quote', true), customerId: ref(input.customerId, 'Customer'), quote: pricing({...input.quote, currency:input.currency || input.quote?.currency || 'KES'}),
         issuedOn: day(input.issuedOn, 'Issue date'), dueOn: day(input.dueOn, 'Due date'),
         status: choice(input.status, ['open', 'completed', 'cancelled'], 'order status'), costsFinalized: input.costsFinalized === true,
         notes: s('notes'), terms: s('terms', 3000) };

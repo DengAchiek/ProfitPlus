@@ -5,3 +5,4 @@ data/
 .wrangler/
 .dev.vars
 cloudflare-build/
+output/

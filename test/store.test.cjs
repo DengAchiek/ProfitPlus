@@ -16,6 +16,59 @@ function fixture(t){
   const payment=(i,overrides={})=>store.saveRecord(user,'payments',{invoiceId:i.id,amount:1000,fee:10,direction:'receipt',method:'M-Pesa',paidOn:'2026-10-14',reference:'TEST',...overrides});
   return{store,user,customer,lead,quote,invoice,payment,dir};
 }
+function directInvoice(f, overrides={}) {
+  return f.store.saveRecord(f.user,'invoices',{customerId:f.customer.id,currency:'KES',
+    quote:{currency:'KES',items:[{description:'Design service',quantity:2,unitPrice:100,unitCost:30}],labour:10,discountPercent:10,taxPercent:16,feePercent:1,fixedFee:1},
+    issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'open',notes:'Thank you for your business.',...overrides});
+}
+test('direct invoices have their own pricing and numbering, with the same payment and profit ledger',t=>{
+  const f=fixture(t),invoice=directInvoice(f);
+  assert.equal(invoice.quoteId,null);assert.equal(invoice.number,'INV-00001');assert.equal(f.store.list(f.user,'quotes').length,0);
+  assert.equal(f.store.subscription(f.user).usage.documents,1);
+  let totals=D.invoiceSummary(invoice);assert.equal(totals.revenue,180);assert.equal(totals.tax,28.8);assert.equal(totals.total,208.8);assert.equal(totals.profit,106.91);
+  assert.throws(()=>f.payment(invoice,{amount:208.81}),e=>e.status===422);
+  f.payment(invoice,{amount:208.8,fee:2});
+  f.store.saveRecord(f.user,'expenses',{invoiceId:invoice.id,description:'Actual fulfilment',amount:70,category:'Labour',incurredOn:'2026-10-16'});
+  const done=f.store.saveRecord(f.user,'invoices',{...invoice,status:'completed',costsFinalized:true},invoice.id,invoice.version);
+  totals=D.invoiceSummary(done,f.store.list(f.user,'payments'),f.store.list(f.user,'expenses'));
+  assert.equal(totals.balance,0);assert.equal(totals.actualProfit,108);
+  assert.equal(f.invoice(f.quote()).number,'INV-00002');
+});
+test('direct invoices validate customer scope, pricing, dates and currency precision',t=>{
+  const f=fixture(t);
+  for(const input of [null,{}, {customerId:f.customer.id,quote:{}}, {customerId:f.customer.id,quoteId:{}}])assert.throws(()=>f.store.saveRecord(f.user,'invoices',input),e=>e.status===422);
+  assert.throws(()=>directInvoice(f,{customerId:'missing'}),e=>e.status===422);
+  assert.throws(()=>directInvoice(f,{dueOn:'2026-10-01'}),e=>e.status===422);
+  assert.throws(()=>directInvoice(f,{quote:{currency:'USD',items:[{description:'Wrong currency',quantity:1,unitPrice:1,unitCost:0}]}}),e=>e.status===422);
+  assert.throws(()=>directInvoice(f,{quote:{currency:'KES',items:[{description:'Too precise',quantity:1,unitPrice:1.001,unitCost:0}]}}),e=>e.status===422);
+  const other=f.store.createBusiness({businessName:'Other',name:'Other',email:'invoice-other@example.test',password:'synthetic-other-password'});
+  assert.throws(()=>f.store.saveRecord(other,'invoices',{customerId:f.customer.id,currency:'KES',quote:{currency:'KES',items:[{description:'Foreign customer',quantity:1,unitPrice:1,unitCost:0}]},issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'open'}),e=>e.status===422);
+  const archived=f.store.saveRecord(f.user,'customers',{name:'Archived customer'});
+  f.store.saveRecord(f.user,'customers',{...archived,archived:true},archived.id,archived.version);
+  assert.throws(()=>directInvoice(f,{customerId:archived.id}),e=>e.status===422);
+  assert.equal(f.store.list(f.user,'invoices').length,0);
+  const kwd=f.store.saveRecord(f.user,'customers',{name:'KWD customer',preferredCurrency:'KWD'});
+  const invoice=f.store.saveRecord(f.user,'invoices',{customerId:kwd.id,quote:{items:[{description:'Precise amount',quantity:1,unitPrice:10.123,unitCost:0}]},issuedOn:'2026-10-16',dueOn:'2026-10-30',status:'open'});
+  assert.equal(invoice.currency,'KWD');assert.equal(D.invoiceSummary(invoice).total,10.123);
+});
+test('saved direct invoices preserve their financial snapshot while dates and terms can be updated',t=>{
+  const f=fixture(t),invoice=directInvoice(f),another=f.store.saveRecord(f.user,'customers',{name:'Another customer'});
+  const changed=f.store.saveRecord(f.user,'invoices',{...invoice,customerId:another.id,currency:'USD',quote:{...invoice.quote,items:[{description:'Changed',quantity:1,unitPrice:1,unitCost:0}]},dueOn:'2026-11-01',terms:'Updated payment instructions'},invoice.id,invoice.version);
+  assert.equal(changed.customerId,invoice.customerId);assert.equal(changed.currency,'KES');assert.deepEqual(changed.quote,invoice.quote);
+  assert.equal(changed.dueOn,'2026-11-01');assert.equal(changed.terms,'Updated payment instructions');
+  assert.throws(()=>f.store.saveRecord(f.user,'invoices',invoice,invoice.id,invoice.version),e=>e.status===409);
+});
+test('multiple direct invoices and quote conversions can be exported and restored together',t=>{
+  const f=fixture(t),first=directInvoice(f),second=directInvoice(f),converted=f.invoice(f.quote());
+  const backup=f.store.export(f.user),revision=f.store.business(f.user).revision;
+  assert.equal(f.store.restore(f.user,backup,revision,true).counts.invoices,3);
+  f.store.restore(f.user,backup,revision);
+  assert.equal(f.store.get(f.user,'invoices',first.id).quoteId,null);assert.equal(f.store.get(f.user,'invoices',second.id).quoteId,null);
+  assert.equal(f.store.get(f.user,'invoices',converted.id).quoteId,converted.quoteId);
+  const duplicate=f.store.export(f.user),copy={...duplicate.records.invoices.find(i=>i.quoteId),id:'duplicate-invoice',number:'INV-00999'};
+  duplicate.records.invoices.push(copy);
+  assert.throws(()=>f.store.restore(f.user,duplicate,f.store.business(f.user).revision,true),e=>e.status===422);
+});
 test('connected customer → enquiry → quotation → invoice → payment → profit',t=>{
   const f=fixture(t),q=f.quote(),i=f.invoice(q);
   assert.equal(f.store.get(f.user,'leads',f.lead.id).status,'won');
