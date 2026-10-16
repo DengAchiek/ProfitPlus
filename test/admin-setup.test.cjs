@@ -3,6 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {createHash}=require('node:crypto');
 const {Store}=require('../lib/store');
 const {createApplication}=require('../server');
+const vm=require('node:vm');
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const code='a1'.repeat(32),email='reserved-admin@example.test',password='synthetic-admin-setup-password';
 const config={tokenHash:hash(code),emailHash:hash(email),expiresAt:'2026-10-17T16:30:00.000Z'};
@@ -66,4 +67,14 @@ test('concurrent claims cannot create more than one administrator account',async
   const responses=await Promise.all([request('/api/admin-setup','POST',input),request('/api/admin-setup','POST',input)]);
   assert.deepEqual(responses.map(r=>r.status).sort(),[201,403]);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,1);
+});
+test('private links prefill the code on first entry or an already-open setup page, then remove it from history',()=>{
+  const elements=Object.fromEntries(['adminSetupForm','setupMessage','setupError','setupSubmit','setupCode'].map(id=>[id,{value:'',hidden:true}]));
+  let onHashChange;
+  const location={hash:'#code='+code};
+  const context={document:{getElementById:id=>elements[id]},location,URLSearchParams,history:{replaceState(){location.hash='';}},window:{addEventListener(event,handler){if(event==='hashchange')onHashChange=handler;}},fetch:async()=>({ok:true,json:async()=>({available:true})})};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../dist/admin-setup.js'),'utf8'),context);
+  assert.equal(elements.setupCode.value,code);assert.equal(location.hash,'');
+  elements.setupCode.value='';location.hash='#code='+code;onHashChange();
+  assert.equal(elements.setupCode.value,code);assert.equal(location.hash,'');
 });

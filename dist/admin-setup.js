@@ -1,9 +1,12 @@
 'use strict';
 (() => {
   const form=document.getElementById('adminSetupForm'),message=document.getElementById('setupMessage'),errorBox=document.getElementById('setupError'),button=document.getElementById('setupSubmit');
-  const fragment=new URLSearchParams(location.hash.slice(1)),code=fragment.get('code');
-  if(code && /^[a-f0-9]{64}$/.test(code))document.getElementById('setupCode').value=code;
-  if(location.hash)history.replaceState(null,'','/admin/setup');
+  function consumeInvitation(){
+    const fragment=new URLSearchParams(location.hash.slice(1)),code=fragment.get('code');
+    if(code && /^[a-f0-9]{64}$/.test(code))document.getElementById('setupCode').value=code;
+    if(location.hash)history.replaceState(null,'','/admin/setup');
+  }
+  consumeInvitation();window.addEventListener('hashchange',consumeInvitation);
   async function request(method,body) {
     const response=await fetch('/api/admin-setup'+(method==='GET'?'/status':''),{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},...(body?{body:JSON.stringify(body)}:{})});
     const result=await response.json();if(!response.ok)throw Error(result.error||'Unable to complete setup.');return result;
