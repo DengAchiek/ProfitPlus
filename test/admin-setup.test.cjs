@@ -12,7 +12,7 @@ async function fixture(t,options={}) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pulse-admin-setup-')),store=new Store(dir);
   if(options.existing)store.createBusiness({...input,businessName:'Existing admin'});
   let now=Date.parse('2026-10-16T16:30:00Z');
-  const app=createApplication({store,startTimers:false,adminEmails:email,adminSetup:options.config??config,analyticsNow:()=>now});
+  const app=createApplication({store,startTimers:false,adminEmails:email,adminSetup:options.config??config,analyticsNow:()=>now,logger:{error(){}}});
   await new Promise((resolve,reject)=>{app.server.once('error',reject);app.server.listen(0,'127.0.0.1',resolve);});
   const origin='http://127.0.0.1:'+app.server.address().port;
   t.after(async()=>{await app.close();fs.rmSync(dir,{recursive:true,force:true});});
@@ -22,7 +22,7 @@ async function fixture(t,options={}) {
 test('private setup creates only the invited administrator and immediately authenticates it',async t=>{
   const {app,store,request}=await fixture(t);
   const page=await request('/admin/setup');assert.equal(page.status,200);assert.match(await page.text(),/New ProfitPlus password/);
-  const status=await request('/api/admin-setup/status');assert.deepEqual(await status.json(),{available:true});assert.equal(status.headers.get('cache-control'),'no-store');
+  const status=await request('/api/admin-setup/status');assert.deepEqual(await status.json(),{available:true,recovery:false});assert.equal(status.headers.get('cache-control'),'no-store');
   assert.equal((await request('/api/register','POST',{...input,businessName:'Cannot claim admin'})).status,422);
   assert.equal((await request('/api/admin-setup','POST',input,{Origin:'https://attacker.example'})).status,403);
   assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:'b2'.repeat(32)})).status,403);
@@ -37,7 +37,7 @@ test('private setup creates only the invited administrator and immediately authe
   assert.equal((await request('/api/admin/dashboard','GET',undefined,{Cookie:cookie})).status,200);
   assert.equal(store.authenticate(email,password).id,session.user.id);
   assert.notEqual(store.db.prepare('SELECT password FROM users').get().password,password);
-  assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false});
+  assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false,recovery:false});
   assert.equal((await request('/api/admin-setup','POST',{...input,password:'different-synthetic-password'})).status,403);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,1);
   assert.equal(app.adminSetup.available(),false);
@@ -46,7 +46,7 @@ test('private setup creates only the invited administrator and immediately authe
 });
 test('setup fails closed when missing, expired or for an email outside the admin allowlist',async t=>{
   const disabled=await fixture(t,{config:{}});
-  assert.deepEqual(await(await disabled.request('/api/admin-setup/status')).json(),{available:false});
+  assert.deepEqual(await(await disabled.request('/api/admin-setup/status')).json(),{available:false,recovery:false});
   assert.equal((await disabled.request('/api/admin-setup','POST',input)).status,403);
   const expired=await fixture(t);expired.expire();
   assert.equal((await expired.request('/api/admin-setup','POST',input)).status,403);
@@ -57,10 +57,59 @@ test('setup fails closed when missing, expired or for an email outside the admin
 test('setup never resets an existing account and rate limits repeated guesses',async t=>{
   const {store,request}=await fixture(t,{existing:true});
   const original=store.authenticate(email,password);
-  assert.equal((await request('/api/admin-setup','POST',{...input,password:'replacement-synthetic-password'})).status,409);
+  assert.equal((await request('/api/admin-setup','POST',{...input,password:'replacement-synthetic-password',mode:'recover'})).status,409);
   assert.equal(store.authenticate(email,password).id,original.id);
   for(let n=0;n<4;n++)assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:'b2'.repeat(32)})).status,403);
   assert.equal((await request('/api/admin-setup','POST',input)).status,429);
+});
+test('an explicitly issued recovery invitation sets the admin password while preserving workspace data',async t=>{
+  const {app,store,request}=await fixture(t,{existing:true,config:{...config,mode:'recover'}});
+  const original=store.authenticate(email,password),oldSession=store.session(original);
+  const staff=store.addUser(original,{name:'Staff',email:'team@example.test',password,role:'staff'}),staffRow=store.authenticate(staff.email,password),staffSession=store.session(staffRow);
+  const customer=store.saveRecord(original,'customers',{name:'Existing customer',notes:'Keep these business records.'});
+  const business=store.business(original),subscription=store.subscriptionRow(original),registration=store.db.prepare('SELECT registered_at FROM platform_profiles WHERE user_id=?').get(original.id);
+  assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:true,recovery:true});
+  for(let n=0;n<10;n++)assert.equal((await request('/api/login','POST',{email,password:'incorrect-old-google-password'})).status,401);
+  assert.equal((await request('/api/login','POST',{email,password})).status,429);
+  assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:'b2'.repeat(32)})).status,403);
+  assert.equal((await request('/api/admin-setup','POST',{...input,email:staff.email})).status,403);
+  assert.equal((await request('/api/admin-setup','POST',{...input,password:'short'})).status,422);
+  store.db.prepare('UPDATE users SET active=0 WHERE id=?').run(original.id);
+  const newPassword='new-custom-administrator-password';
+  const response=await request('/api/admin-setup','POST',{...input,name:'Custom Admin',password:newPassword});
+  assert.equal(response.status,201,await response.clone().text());
+  const body=await response.json(),cookie=response.headers.get('set-cookie').split(';')[0];
+  assert.equal(body.user.id,original.id);assert.equal(body.user.name,'Custom Admin');assert.equal(body.user.active,true);assert.equal(body.user.role,original.role);
+  assert.equal(store.findSession(oldSession.token),undefined);assert.equal(store.findSession(staffSession.token).id,staff.id);
+  const updated=store.authenticate(email,newPassword);assert.equal(updated.business_id,original.business_id);
+  assert.deepEqual(store.get(updated,'customers',customer.id),customer);assert.deepEqual(store.business(updated),business);assert.deepEqual(store.subscriptionRow(updated),subscription);
+  assert.deepEqual(store.db.prepare('SELECT registered_at FROM platform_profiles WHERE user_id=?').get(original.id),registration);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,2);
+  assert.equal((await(await request('/api/bootstrap','GET',undefined,{Cookie:cookie})).json()).platformAdmin,true);
+  assert.equal((await request('/api/login','POST',{email,password:newPassword})).status,200);
+  assert.equal((await request('/api/login','POST',{email,password})).status,401);
+  assert.equal((await request('/api/admin-setup','POST',input)).status,403);
+  const event=store.db.prepare("SELECT before_data,after_data FROM audit WHERE action='recovered administrator access'").get();
+  assert.doesNotMatch(JSON.stringify(event),/password|csrf|token/);
+  assert.equal(app.adminSetup.available(),false);
+});
+test('failed recovery rolls back credentials, session revocation and invitation consumption',async t=>{
+  const {app,store,request}=await fixture(t,{existing:true,config:{...config,mode:'recover'}});
+  const original=store.authenticate(email,password),session=store.session(original),audit=store.audit;
+  store.audit=()=>{throw Error('Synthetic recovery audit failure');};
+  assert.equal((await request('/api/admin-setup','POST',{...input,password:'replacement-admin-password'})).status,500);
+  assert.equal(store.authenticate(email,password).id,original.id);assert.equal(store.findSession(session.token).id,original.id);assert.equal(app.adminSetup.available(),true);
+  store.audit=audit;
+  assert.equal((await request('/api/admin-setup','POST',{...input,password:'replacement-admin-password'})).status,201);
+});
+test('recovery invitations are single use under concurrent claims',async t=>{
+  const {store,request}=await fixture(t,{existing:true,config:{...config,mode:'recover'}});
+  const original=store.authenticate(email,password);
+  const responses=await Promise.all([request('/api/admin-setup','POST',{...input,password:'first-private-new-password'}),request('/api/admin-setup','POST',{...input,password:'second-private-new-password'})]);
+  assert.deepEqual(responses.map(r=>r.status).sort(),[201,403]);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,1);
+  const winningPassword=responses[0].status===201?'first-private-new-password':'second-private-new-password';
+  assert.equal(store.authenticate(email,winningPassword).id,original.id);
 });
 test('concurrent claims cannot create more than one administrator account',async t=>{
   const {store,request}=await fixture(t);
@@ -69,10 +118,10 @@ test('concurrent claims cannot create more than one administrator account',async
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,1);
 });
 test('private links prefill the code on first entry or an already-open setup page, then remove it from history',()=>{
-  const elements=Object.fromEntries(['adminSetupForm','setupMessage','setupError','setupSubmit','setupCode'].map(id=>[id,{value:'',hidden:true}]));
+  const elements=Object.fromEntries(['adminSetupForm','setupMessage','setupError','setupSubmit','setupCode','setupTitle','setupIntro','setupEffect'].map(id=>[id,{value:'',hidden:true}]));
   let onHashChange;
   const location={hash:'#code='+code};
-  const context={document:{getElementById:id=>elements[id]},location,URLSearchParams,history:{replaceState(){location.hash='';}},window:{addEventListener(event,handler){if(event==='hashchange')onHashChange=handler;}},fetch:async()=>({ok:true,json:async()=>({available:true})})};
+  const context={document:{getElementById:id=>elements[id]},location,URLSearchParams,history:{replaceState(){location.hash='';}},window:{addEventListener(event,handler){if(event==='hashchange')onHashChange=handler;}},fetch:async()=>({ok:true,json:async()=>({available:true,recovery:false})})};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../dist/admin-setup.js'),'utf8'),context);
   assert.equal(elements.setupCode.value,code);assert.equal(location.hash,'');
   elements.setupCode.value='';location.hash='#code='+code;onHashChange();

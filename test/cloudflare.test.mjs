@@ -14,7 +14,7 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
   const start = (vars = {}) => unstable_dev('cloudflare/worker.mjs', {
     config: 'wrangler.jsonc', ip: '127.0.0.1', port: 0, local: true,
     persist: true, persistTo: dir, logLevel: 'error',
-    vars: { PUBLIC_ORIGIN: origin, PLATFORM_ADMIN_EMAILS:'', PLATFORM_ADMIN_EMAIL_SHA256:adminEmails?createHash('sha256').update(adminEmails).digest('hex'):'', PLATFORM_ADMIN_SETUP_TOKEN_SHA256:'',PLATFORM_ADMIN_SETUP_EMAIL_SHA256:'',PLATFORM_ADMIN_SETUP_EXPIRES_AT:'', ...vars },
+    vars: { PUBLIC_ORIGIN: origin, PLATFORM_ADMIN_EMAILS:'', PLATFORM_ADMIN_EMAIL_SHA256:adminEmails?createHash('sha256').update(adminEmails).digest('hex'):'', PLATFORM_ADMIN_SETUP_TOKEN_SHA256:'',PLATFORM_ADMIN_SETUP_EMAIL_SHA256:'',PLATFORM_ADMIN_SETUP_EXPIRES_AT:'',PLATFORM_ADMIN_SETUP_MODE:'create', ...vars },
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false },
   });
   let worker = await start();
@@ -169,7 +169,7 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const vars={PLATFORM_ADMIN_EMAIL_SHA256:hash(target),PLATFORM_ADMIN_SETUP_EMAIL_SHA256:hash(target),PLATFORM_ADMIN_SETUP_TOKEN_SHA256:hash(code),PLATFORM_ADMIN_SETUP_EXPIRES_AT:new Date(Date.now()+3600000).toISOString()};
     await worker.stop();worker=await start(vars);
     assert.equal((await request('/admin/setup')).status,200);
-    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:true});
+    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:true,recovery:false});
     const input={name:'Invited administrator',email:target,password:'synthetic-invited-password',setupCode:code};
     assert.equal((await request('/api/register','POST',{...input,businessName:'Blocked claim'})).status,422);
     assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:'d4'.repeat(32)})).status,403);
@@ -179,8 +179,26 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.equal((await request('/api/admin/dashboard','GET',null,session)).status,200);
     assert.equal((await request('/api/admin/dashboard','GET',null,owner)).status,403);
     await worker.stop();worker=await start(vars);
-    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false});
+    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false,recovery:false});
     assert.equal((await request('/api/admin-setup','POST',input)).status,403);
     assert.equal((await request('/api/admin/dashboard','GET',null,session)).status,200);
+    const customerResponse=await request('/api/records/customers','POST',{name:'Keep admin workspace customer'},session);assert.equal(customerResponse.status,201);
+    const keptCustomer=await customerResponse.json(),recoveryCode='e5'.repeat(32);
+    const recoveryVars={...vars,PLATFORM_ADMIN_SETUP_TOKEN_SHA256:hash(recoveryCode),PLATFORM_ADMIN_SETUP_MODE:'recover'};
+    await worker.stop();worker=await start(recoveryVars);
+    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:true,recovery:true});
+    assert.equal((await request('/api/admin-setup','POST',input)).status,403,'old invitation is no longer valid');
+    const recovery=await request('/api/admin-setup','POST',{...input,name:'Recovered administrator',password:'fresh-private-admin-password',setupCode:recoveryCode});
+    assert.equal(recovery.status,201,await recovery.clone().text());
+    const recoveredSession={cookie:recovery.headers.get('set-cookie').split(';')[0],...(await recovery.json())};
+    assert.equal(recoveredSession.user.id,session.user.id);
+    assert.equal((await request('/api/bootstrap','GET',null,session)).status,401);
+    const kept=await request('/api/records/customers/'+keptCustomer.id,'GET',null,recoveredSession);assert.equal(kept.status,200);assert.equal((await kept.json()).name,keptCustomer.name);
+    assert.equal((await request('/api/login','POST',{email:target,password:input.password})).status,401);
+    assert.equal((await request('/api/login','POST',{email:target,password:'fresh-private-admin-password'})).status,200);
+    await worker.stop();worker=await start(recoveryVars);
+    assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false,recovery:true});
+    assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:recoveryCode})).status,403);
+    assert.equal((await request('/api/admin/dashboard','GET',null,recoveredSession)).status,200);
   });
 });
