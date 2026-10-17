@@ -164,7 +164,7 @@ function createApplication(options = {}) {
       if (route === '/api/backup' && req.method === 'GET') {
         const bytes = Buffer.from(JSON.stringify(store.export(user), null, 2));
         if (bytes.length > backupLimit) throw new AppError(422, 'Workspace exceeds the portable backup limit. Contact the service operator for database recovery.');
-        res.writeHead(200, { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="profitpulse-' + new Date().toISOString().slice(0, 10) + '.json"' });
+        res.writeHead(200, { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="bizatrio-' + new Date().toISOString().slice(0, 10) + '.json"' });
         return res.end(bytes);
       }
       if (route === '/api/backups' && req.method === 'GET') {
@@ -216,7 +216,7 @@ function createApplication(options = {}) {
 if (require.main === module) {
   const app = createApplication();
   const port = Number(process.env.PORT || 8080), host = process.env.BIND_HOST || '127.0.0.1';
-  app.server.listen(port, host, () => console.log('ProfitPulse is running at http://' + host + ':' + port));
+  app.server.listen(port, host, () => console.log('BizAtrio is running at http://' + host + ':' + port));
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => app.close().then(() => process.exit(0)));
 }
 module.exports = { createApplication, STATIC_FILES };

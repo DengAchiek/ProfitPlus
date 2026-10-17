@@ -14,9 +14,9 @@
   function loadStatus(){
     request('GET').then(result=>{
       form.hidden=!result.available;
-      message.textContent=result.available?'Enter the administrator email from your invitation and choose your new ProfitPlus password.':'This invitation is unavailable, expired or already used. If you created the account, use Sign in below.';
-      document.getElementById('setupTitle').textContent=result.recovery?'Set up your admin access.':'Set your ProfitPlus password.';
-      document.getElementById('setupIntro').textContent=result.recovery?'Use this private invitation to create your admin account or set a new password for an existing admin account. Choose a ProfitPlus password of at least 12 characters.':'This creates your ProfitPlus account. Choose a new password for this application; your Google password is used only with Google.';
+      message.textContent=result.available?'Enter the administrator email from your invitation and choose your new BizAtrio password.':'This invitation is unavailable, expired or already used. If you created the account, use Sign in below.';
+      document.getElementById('setupTitle').textContent=result.recovery?'Set up your admin access.':'Set your BizAtrio password.';
+      document.getElementById('setupIntro').textContent=result.recovery?'Use this private invitation to create your admin account or set a new password for an existing admin account. Choose a BizAtrio password of at least 12 characters.':'This creates your BizAtrio account. Choose a new password for this application; your Google password is used only with Google.';
       document.getElementById('setupEffect').textContent=result.recovery?'For an existing admin account, this restores sign-in access and signs out previous sessions. Your business records are kept. The invitation works once, for the email it was issued to.':'Use at least 12 characters. This invitation works once, for the administrator email it was issued to.';
       button.textContent=result.recovery?'Set up admin access':'Create admin account';
     }).catch(()=>{message.textContent='Unable to reach the setup service. Refresh to try again.';});

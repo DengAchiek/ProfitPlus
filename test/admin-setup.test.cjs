@@ -21,7 +21,7 @@ async function fixture(t,options={}) {
 }
 test('private setup creates only the invited administrator and immediately authenticates it',async t=>{
   const {app,store,request}=await fixture(t);
-  const page=await request('/admin/setup');assert.equal(page.status,200);assert.match(await page.text(),/New ProfitPlus password/);
+  const page=await request('/admin/setup');assert.equal(page.status,200);assert.match(await page.text(),/New BizAtrio password/);
   const status=await request('/api/admin-setup/status');assert.deepEqual(await status.json(),{available:true,recovery:false});assert.equal(status.headers.get('cache-control'),'no-store');
   assert.equal((await request('/api/register','POST',{...input,businessName:'Cannot claim admin'})).status,422);
   assert.equal((await request('/api/admin-setup','POST',input,{Origin:'https://attacker.example'})).status,403);
