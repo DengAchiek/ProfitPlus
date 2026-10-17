@@ -87,8 +87,12 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.equal((await request('/api/telemetry','POST',pulse,other)).status,200);
     const profile=await(await request('/api/admin/users/'+other.user.id,'GET',null,owner)).json();assert.equal(profile.services[0].visits,1);
     assert.doesNotMatch(JSON.stringify(profile),/password|csrf|token/);
-    const summary=await(await request('/api/admin/dashboard?days=7','GET',null,owner)).json();assert.equal(summary.totals.registeredUsers,3);assert.equal(summary.totals.activeUsers,2);assert.ok(summary.performance.requests>0);
+    const summary=await(await request('/api/admin/dashboard?days=7','GET',null,owner)).json();assert.equal(summary.totals.registeredUsers,2);assert.equal(summary.totals.activeUsers,1);assert.ok(summary.performance.requests>0);
     assert.equal((await request('/api/register','POST',account('owner'))).status,422);
+    assert.equal(boot.records,undefined);assert.equal(boot.subscription,undefined);
+    for(const [route,method] of [['/api/records/customers/'+customer.id,'GET'],['/api/records/customers','POST'],['/api/backup','GET'],['/api/billing','GET'],['/api/integrations','GET']])assert.equal((await request(route,method,method==='POST'?{name:'Blocked admin'}:null,owner)).status,403);
+    const clients=await(await request('/api/admin/clients','GET',null,owner)).json();assert.equal(clients.total,2);
+    await worker.stop();adminEmails='';worker=await start();
   });
   await t.test('quote PDFs embed the bundled fonts without a local filesystem', async () => {
     const response = await request('/api/records/quotes', 'POST', { customerId: customer.id, currency: 'KES',
@@ -126,8 +130,8 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const backup = await (await request('/api/backup', 'GET', null, owner)).json();
     assert.equal((await request('/api/restore/preview', 'POST', { backup }, owner)).status, 200);
     const boot = await (await request('/api/bootstrap', 'GET', null, owner)).json();
-    assert.equal(boot.platformAdmin,true);
-    const analytics=await(await request('/api/admin/users/'+other.user.id,'GET',null,owner)).json();assert.equal(analytics.services[0].visits,1);
+    assert.equal(boot.platformAdmin,false);
+    assert.equal((await request('/api/admin/users/'+other.user.id,'GET',null,owner)).status,403);
     const result = await request('/api/restore', 'POST', { backup, revision: boot.business.revision }, owner);
     assert.equal(result.status, 200); const { safetyFile } = await result.json();
     const copies = await (await request('/api/backups', 'GET', null, owner)).json();
@@ -182,8 +186,8 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false,recovery:false});
     assert.equal((await request('/api/admin-setup','POST',input)).status,403);
     assert.equal((await request('/api/admin/dashboard','GET',null,session)).status,200);
-    const customerResponse=await request('/api/records/customers','POST',{name:'Keep admin workspace customer'},session);assert.equal(customerResponse.status,201);
-    const keptCustomer=await customerResponse.json(),recoveryCode='e5'.repeat(32);
+    const customerResponse=await request('/api/records/customers','POST',{name:'Blocked admin customer'},session);assert.equal(customerResponse.status,403);
+    const recoveryCode='e5'.repeat(32);
     const recoveryVars={...vars,PLATFORM_ADMIN_SETUP_TOKEN_SHA256:hash(recoveryCode),PLATFORM_ADMIN_SETUP_MODE:'recover'};
     await worker.stop();worker=await start(recoveryVars);
     assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:true,recovery:true});
@@ -193,7 +197,8 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     const recoveredSession={cookie:recovery.headers.get('set-cookie').split(';')[0],...(await recovery.json())};
     assert.equal(recoveredSession.user.id,session.user.id);
     assert.equal((await request('/api/bootstrap','GET',null,session)).status,401);
-    const kept=await request('/api/records/customers/'+keptCustomer.id,'GET',null,recoveredSession);assert.equal(kept.status,200);assert.equal((await kept.json()).name,keptCustomer.name);
+    assert.equal((await request('/api/records/customers/'+customer.id,'GET',null,recoveredSession)).status,403);
+    assert.equal((await(await request('/api/records/customers/'+customer.id,'GET',null,owner)).json()).name,customer.name);
     assert.equal((await request('/api/login','POST',{email:target,password:input.password})).status,401);
     assert.equal((await request('/api/login','POST',{email:target,password:'fresh-private-admin-password'})).status,200);
     await worker.stop();worker=await start(recoveryVars);

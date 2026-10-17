@@ -26,7 +26,7 @@ test('platform admin authorization, safe profiles, server metrics and tenant iso
   const staff=await request('/api/users','POST',{name:'Staff',email:'staff-admin@example.test',password:account().password,role:'staff',platformAdmin:true},ownerSession);
   assert.equal(staff.status,201);const staffSession=await login('staff-admin@example.test');
   await t.test('only configured admin can query any admin endpoint, including known user IDs',async()=>{
-    for(const route of ['/api/admin/dashboard','/api/admin/users','/api/admin/users/'+admin.id]){
+    for(const route of ['/api/admin/dashboard','/api/admin/clients','/api/admin/users','/api/admin/users/'+admin.id]){
       assert.equal((await request(route)).status,401);
       for(const session of [ownerSession,staffSession])assert.equal((await request(route,'GET',null,session,{'X-Admin':'true','X-Role':'admin'})).status,403);
       assert.equal((await request(route,'GET',null,adminSession)).status,200);
@@ -40,6 +40,26 @@ test('platform admin authorization, safe profiles, server metrics and tenant iso
   await t.test('configured addresses cannot be claimed through registration or team creation',async()=>{
     assert.equal((await request('/api/register','POST',account('ADMIN@example.test'))).status,422);
     assert.equal((await request('/api/users','POST',{name:'Impersonator',email:'admin@example.test',password:account().password,role:'owner'},ownerSession)).status,422);
+  });
+  await t.test('administrators receive no tenant data and cannot use business APIs, PDFs or exports',async()=>{
+    const preserved=store.saveRecord(admin,'customers',{name:'Historical admin business record'});
+    const boot=await(await request('/api/bootstrap','GET',null,adminSession)).json();
+    assert.deepEqual(Object.keys(boot).sort(),['csrf','platformAdmin','user']);
+    for(const [route,method,body] of [
+      ['/api/records/customers/'+preserved.id,'GET'],['/api/records/customers','POST',{name:'Must not save'}],
+      ['/api/records/customers/'+preserved.id,'PUT',{record:{name:'Must not update'},version:1}],
+      ['/api/records/quotes/any-id/pdf','GET'],['/api/records/invoices/any-id/pdf','GET'],['/api/records/customers/'+preserved.id+'/history','GET'],
+      ['/api/backup','GET'],['/api/backups','GET'],['/api/restore/preview','POST',{}],['/api/legacy','POST',{}],
+      ['/api/settings','PUT',{}],['/api/users','POST',{}],['/api/users/'+owner.id,'PUT',{}],
+      ['/api/billing','GET'],['/api/billing/checkout','POST',{}],['/api/integrations','GET'],['/api/integrations/website','POST',{}],
+    ])assert.equal((await request(route,method,body,adminSession)).status,403,method+' '+route);
+    assert.equal(store.get(admin,'customers',preserved.id).name,preserved.name);
+    assert.equal((await request('/api/admin/channel-settings','GET',null,adminSession)).status,200);
+    assert.equal((await request('/api/account/password','POST',{currentPassword:account().password,newPassword:'short'},adminSession)).status,422);
+    const extra=await login(admin.email);assert.equal((await request('/api/logout','POST',null,extra)).status,200);
+    assert.equal((await request('/api/bootstrap','GET',null,extra)).status,401);
+    assert.equal((await request('/api/telemetry','POST',{module:'customers'},adminSession)).status,200);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM platform_usage WHERE user_id=?').get(admin.id).n,0);
   });
   await t.test('usage is session-scoped, validated and protected by CSRF and origin',async()=>{
     const ping={module:'invoices',tabId:'synthetic-tab-1',sequence:1,activeSeconds:60,view:true,userId:admin.id};
@@ -60,7 +80,7 @@ test('platform admin authorization, safe profiles, server metrics and tenant iso
     const write=store.write;store.write=()=>{throw Error('Synthetic failure');};
     assert.equal((await request('/api/records/customers','POST',{name:'Will fail'},ownerSession)).status,500);store.write=write;
     const data=await(await request('/api/admin/dashboard?days=7','GET',null,adminSession)).json();
-    assert.equal(data.totals.registeredUsers,3);assert.equal(data.totals.newUsers,2);assert.equal(data.totals.missingRegistrationDates,1);
+    assert.equal(data.totals.registeredUsers,2);assert.equal(data.totals.newUsers,2);assert.equal(data.totals.missingRegistrationDates,0);
     assert.equal(data.totals.activeSeconds,30);assert.equal(data.totals.activeUsers,1);
     assert.equal(data.performance.serverErrors,1);assert.ok(data.performance.requests>0);
     assert.equal(data.daily.reduce((n,r)=>n+r.requests,0),data.performance.requests);
@@ -86,6 +106,35 @@ test('platform admin authorization, safe profiles, server metrics and tenant iso
   });
 });
 
+test('client subscriptions use current entitlements, exclude admins and expose only account and activity metadata',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bizatrio-clients-')),store=new Store(dir);
+  t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true});});
+  const admin=store.createBusiness(account('admin@example.test','Platform Admin')),now=Date.now();
+  const analytics=new Analytics(store,{adminEmails:admin.email,now:()=>now});
+  const cases=[['active',now+86400000,now+86400000,'active'],['active',now-1,now+86400000,'expired'],['trialing',null,now+86400000,'trialing'],['trialing',null,now-1,'trial_expired'],['past_due',now+86400000,now+86400000,'past_due'],['canceled',now-1,now-1,'canceled']];
+  const clients=cases.map(([status,period,trial,expected],i)=>{
+    const user=store.createBusiness(account('client'+i+'@example.test','Client '+i));analytics.registered(user);
+    store.db.prepare('UPDATE subscriptions SET status=?,period_end=?,trial_end=? WHERE business_id=?').run(status,period,trial,user.business_id);
+    assert.equal(analytics.clients(admin,{search:user.email}).clients[0].subscriptionStatus,expected);
+    assert.equal(analytics.profile(admin,user.id,30).user.subscriptionStatus,expected);
+    return user;
+  });
+  store.saveRecord(admin,'customers',{name:'Private historical record'});
+  store.db.prepare('INSERT INTO platform_usage VALUES (?,?,?,?,?,?)').run(new Date(now).toISOString().slice(0,10),admin.id,'quotes',999,10,100);
+  analytics.heartbeat(clients[0],{module:'invoices',tabId:'synthetic-client-tab',sequence:1,view:true,activeSeconds:0});
+  const rows=analytics.clients(admin),summary=analytics.dashboard(admin,30);
+  assert.equal(rows.total,6);assert.equal(rows.subscriptions.activeSubscribers,1);assert.equal(rows.subscriptions.trialingClients,1);assert.equal(rows.subscriptions.pastDueClients,1);
+  assert.equal(summary.totals.registeredUsers,6);assert.equal(summary.totals.activeUsers,1);assert.equal(summary.totals.actions,0);
+  assert.equal(analytics.clients(admin,{status:'active'}).total,1);assert.equal(analytics.clients(admin,{search:'PLATFORM ADMIN'}).total,0);
+  assert.equal(analytics.clients(admin,{search:"' OR 1=1 --"}).total,0);assert.equal(analytics.clients(admin,{page:2}).clients.length,0);
+  assert.equal(analytics.users(admin,{businessId:clients[0].business_id}).total,1);
+  assert.doesNotMatch(JSON.stringify(rows),/Private historical record|password|token|subscription_id|customer_id/);
+  assert.throws(()=>analytics.clients(clients[0]),{status:403});
+  store.addUser(clients[0],{name:'Zebra Owner',email:'aaa-owner@example.test',password:account().password,role:'owner'});
+  const multiOwner=analytics.clients(admin,{search:'aaa-owner@'}).clients[0];
+  assert.equal(multiOwner.ownerName,'Zebra Owner');assert.equal(multiOwner.ownerEmail,'aaa-owner@example.test');
+});
+
 test('user directory search and pagination return bounded profiles without duplication',t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pulse-admin-pages-')),store=new Store(dir);
   t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true});});
@@ -97,8 +146,8 @@ test('user directory search and pagination return bounded profiles without dupli
     analytics.registered({id});
   }
   const first=analytics.users(admin,{page:1}),second=analytics.users(admin,{page:2});
-  assert.equal(first.total,23);assert.equal(first.users.length,20);assert.equal(second.users.length,3);
-  assert.equal(new Set([...first.users,...second.users].map(u=>u.id)).size,23);
+  assert.equal(first.total,22);assert.equal(first.users.length,20);assert.equal(second.users.length,2);
+  assert.equal(new Set([...first.users,...second.users].map(u=>u.id)).size,22);
   assert.equal(analytics.users(admin,{search:'MEMBER-21@'}).users[0].id,'synthetic-user-21');
   assert.equal(analytics.users(admin,{search:"' OR 1=1 --"}).total,0);
   assert.equal(analytics.users(admin,{page:3}).users.length,0);
@@ -107,31 +156,32 @@ test('user directory search and pagination return bounded profiles without dupli
 test('analytics cap time across sessions, preserve history on restart and prune bounded aggregates',t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pulse-analytics-')),store=new Store(dir);
   t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true});});
-  const user=store.createBusiness(account('admin@example.test'));
+  const admin=store.createBusiness(account('admin@example.test'));
+  const user=store.createBusiness(account('client@example.test'));
   let now=Date.parse('2026-10-16T10:00:00Z');
-  let analytics=new Analytics(store,{adminEmails:user.email,now:()=>now});
+  let analytics=new Analytics(store,{adminEmails:admin.email,now:()=>now});
   const ping={module:'quotes',tabId:'first-tab',sequence:1,activeSeconds:60,view:true};
   analytics.heartbeat(user,ping);now+=30000;
   analytics.heartbeat(user,{...ping,sequence:2,view:false});
   analytics.heartbeat(user,{...ping,tabId:'second-tab',sequence:1,view:true});
-  assert.equal(analytics.dashboard(user,7).totals.activeSeconds,30);
+  assert.equal(analytics.dashboard(admin,7).totals.activeSeconds,30);
   now+=600000;analytics.heartbeat(user,{...ping,sequence:3,view:false});
-  assert.equal(analytics.dashboard(user,7).totals.activeSeconds,90);
+  assert.equal(analytics.dashboard(admin,7).totals.activeSeconds,90);
   analytics.request('/api/records/quotes/private-id/pdf?private=query','GET',200,250,user);
   analytics.request('/api/login','POST',401,100,null);
-  const before=analytics.dashboard(user,7);
-  analytics=new Analytics(store,{adminEmails:user.email,now:()=>now});
-  assert.equal(analytics.dashboard(user,7).trackingStartedAt,before.trackingStartedAt);
-  assert.equal(analytics.dashboard(user,7).totals.activeSeconds,90);
-  assert.equal(analytics.dashboard(user,7).performance.averageMs,175);
-  assert.ok(!JSON.stringify(analytics.dashboard(user,7).routes).includes('private'));
+  const before=analytics.dashboard(admin,7);
+  analytics=new Analytics(store,{adminEmails:admin.email,now:()=>now});
+  assert.equal(analytics.dashboard(admin,7).trackingStartedAt,before.trackingStartedAt);
+  assert.equal(analytics.dashboard(admin,7).totals.activeSeconds,90);
+  assert.equal(analytics.dashboard(admin,7).performance.averageMs,175);
+  assert.ok(!JSON.stringify(analytics.dashboard(admin,7).routes).includes('private'));
   now+=92*86400000;
-  const pruned=analytics.dashboard(user,90);
+  const pruned=analytics.dashboard(admin,90);
   assert.equal(pruned.totals.activeSeconds,0);assert.equal(pruned.performance.requests,0);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM platform_usage').get().n,0);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM platform_requests').get().n,0);
   assert.equal(pruned.totals.registeredUsers,1);
-  const noAdmin=new Analytics(store,{now:()=>now});assert.throws(()=>noAdmin.dashboard(user,7),{status:403});
+  const noAdmin=new Analytics(store,{now:()=>now});assert.throws(()=>noAdmin.dashboard(admin,7),{status:403});
   const hashed=new Analytics(store,{adminEmailHashes:createHash('sha256').update(user.email).digest('hex'),now:()=>now});
   assert.equal(hashed.isAdmin(user),true);assert.throws(()=>hashed.reserveEmail(user.email.toUpperCase()),{status:422});
 });

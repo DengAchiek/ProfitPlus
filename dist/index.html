@@ -18,7 +18,7 @@
   <div id="auth" class="auth-shell" hidden></div>
   <div id="workspace" hidden>
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">◈</span> BizAtrio<span class="edition">WORKSPACE</span></div>
+      <div class="brand"><span class="brand-mark">◈</span> BizAtrio<span class="edition" id="workspaceEdition">WORKSPACE</span></div>
       <div class="business-label" id="businessLabel"></div>
       <nav aria-label="Main navigation" id="navigation">
         <button data-view="overview"><span>◫</span> Overview</button>
@@ -31,17 +31,17 @@
         <button class="owner-only" data-view="billing"><span>◇</span> Subscription</button>
         <button data-view="settings"><span>⚙</span> Settings & backups</button>
       </nav>
-      <div class="sidebar-bottom"><div class="connection"><span class="dot"></span><span id="connectionText">Connected to your workspace</span></div><p>Every enquiry. Every quote.<br>A clearer picture of your business.</p></div>
+      <div class="sidebar-bottom"><div class="connection"><span class="dot"></span><span id="connectionText">Connected to your workspace</span></div><p id="sidebarDescription">Every enquiry. Every quote. A clearer picture of your business.</p></div>
     </aside>
     <main>
-      <header class="topbar"><div><span class="eyebrow">YOUR BUSINESS, CONNECTED</span><div id="workspaceName"></div></div><div class="top-actions"><button class="quiet" id="syncButton">Refresh</button><button class="quiet owner-only" id="exportButton">↓ Backup</button><button id="accountButton" class="avatar-button"></button><button id="logoutButton" class="quiet">Sign out</button></div></header>
+      <header class="topbar"><div><span class="eyebrow" id="workspaceEyebrow">YOUR BUSINESS, CONNECTED</span><div id="workspaceName"></div></div><div class="top-actions"><button class="quiet" id="syncButton">Refresh</button><button class="quiet owner-only" id="exportButton">↓ Backup</button><button id="accountButton" class="avatar-button"></button><button id="logoutButton" class="quiet">Sign out</button></div></header>
       <div id="demoBanner" class="banner" hidden>DEMO WORKSPACE · Synthetic records, separate from your business. <button id="exitDemo">Return to sign in</button></div>
       <div id="subscriptionBanner" class="banner" hidden><span id="subscriptionMessage"></span> <button data-action="go" data-kind="billing">View subscription</button></div>
       <div id="syncNotice" class="banner warning" role="status" hidden></div>
       <div id="legacyNotice" class="banner" hidden>Found records from the original browser workspace. <button id="legacyImportButton">Preview import</button><button id="legacyExportButton">Download original data</button></div>
       <div id="content" tabindex="-1"></div>
       <section id="replyComposer" class="reply-composer card" aria-label="Reply composer" hidden></section>
-      <footer class="page-footer">BizAtrio <span>Amounts show their currency · Estimates and collected payments are shown separately</span></footer>
+      <footer class="page-footer">BizAtrio <span id="footerDescription">Amounts show their currency · Estimates and collected payments are shown separately</span></footer>
     </main>
   </div>
   <dialog id="editor" aria-labelledby="dialogTitle"><div class="dialog-header"><div><span class="eyebrow" id="dialogEyebrow">YOUR WORKSPACE</span><h2 id="dialogTitle"></h2></div><button type="button" class="icon-button" id="closeDialog" aria-label="Close dialog">×</button></div><div id="dialogBody"></div></dialog>

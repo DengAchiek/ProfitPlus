@@ -27,11 +27,12 @@ const signed=(f,payload)=>{const bytes=Buffer.from(JSON.stringify(payload));retu
 
 test('website intake over HTTP: source identity, permissions, privacy and immutable messages',async t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pulse-capture-http-')),store=new Store(dir),user=store.createBusiness(account('owner@example.test')),other=store.createBusiness(account('other@example.test'));
-  const app=createApplication({store,startTimers:false,adminEmails:user.email});
+  const admin=store.createBusiness(account('platform-admin@example.test'));
+  const app=createApplication({store,startTimers:false,adminEmails:admin.email});
   await new Promise((resolve,reject)=>{app.server.once('error',reject);app.server.listen(0,'127.0.0.1',resolve);});
   const origin='http://127.0.0.1:'+app.server.address().port;
   t.after(async()=>{await app.close();fs.rmSync(dir,{recursive:true,force:true});});
-  const sessions={};for(const u of [user,other]){const s=store.session(u);sessions[u.id]={Cookie:'pulse_session='+s.token,'X-CSRF-Token':s.csrf};}
+  const sessions={};for(const u of [user,other,admin]){const s=store.session(u);sessions[u.id]={Cookie:'pulse_session='+s.token,'X-CSRF-Token':s.csrf};}
   const request=(route,method='GET',body,who=user,headers={})=>fetch(origin+route,{method,headers:{Origin:origin,...(who?sessions[who.id]:{}),...(body?{'Content-Type':'application/json'}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});
   let connection,nonce,lead;
   await t.test('manual and forged-source enquiries are rejected; owners cannot configure the platform app',async()=>{
@@ -41,7 +42,7 @@ test('website intake over HTTP: source identity, permissions, privacy and immuta
     assert.equal((await request('/api/integrations/website','POST',{websiteOrigin:'https://client.example.test'},staff)).status,403);
   });
   await t.test('Meta redirects distinguish expired, cancelled, empty-account and provider failures without leaking credentials',async()=>{
-    app.channels.saveAdminConfig(user,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
+    app.channels.saveAdminConfig(admin,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
     const callback=async(query,expected)=>{
       const response=await fetch(origin+'/api/integrations/oauth/callback?'+new URLSearchParams(query),{headers:sessions[user.id],redirect:'manual'});
       assert.equal(response.status,302);assert.equal(response.headers.get('location'),'/app?channel='+expected+'#integrations');assert.doesNotMatch(response.headers.get('location'),/synthetic-meta-secret|access_token|code=/);
@@ -55,7 +56,7 @@ test('website intake over HTTP: source identity, permissions, privacy and immuta
     app.channels.fetch=async()=>new Response(JSON.stringify({error:{message:'private-provider-error'}}),{status:400});
     await callback({state:start(),code:'private-code'},'provider_error');
     app.channels.fetch=realFetch;
-    app.channels.saveAdminConfig(user,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
+    app.channels.saveAdminConfig(admin,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
   });
   await t.test('website connection and embed are tenant scoped and permit framing only by the client site',async()=>{
     const r=await request('/api/integrations/website','POST',{websiteOrigin:'https://client.example.test',label:'Public enquiries',visitsEnabled:true});assert.equal(r.status,201);connection=await r.json();

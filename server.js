@@ -135,12 +135,22 @@ function createApplication(options = {}) {
         if(route==='/api/admin/channel-settings'&&req.method==='GET')return json(res,200,channels.adminConfig(user));
         if(route==='/api/admin/channel-settings'&&req.method==='PUT')return json(res,200,channels.saveAdminConfig(user,await body(req,10000)));
         if (route === '/api/admin/dashboard' && req.method === 'GET') return json(res,200,analytics.dashboard(user,url.searchParams.get('days')));
+        if (route === '/api/admin/clients' && req.method === 'GET') return json(res,200,analytics.clients(user,Object.fromEntries(url.searchParams)));
         if (route === '/api/admin/users' && req.method === 'GET') return json(res,200,analytics.users(user,Object.fromEntries(url.searchParams)));
         if (/^\/api\/admin\/users\/[^/]+$/.test(route) && req.method === 'GET') return json(res,200,analytics.profile(user,route.split('/')[4],url.searchParams.get('days')));
         return json(res,404,{error:'Endpoint not found.'});
       }
       if (route === '/api/telemetry' && req.method === 'POST') return json(res,200,analytics.heartbeat(user,await body(req,4096)));
-      if (route === '/api/bootstrap' && req.method === 'GET') {channels.drain(user.business_id);return json(res, 200, { user: publicUser(user), platformAdmin:analytics.isAdmin(user), csrf: user.csrf, business: store.business(user), records: store.records(user), users: store.users(user), activity: store.activity(user), captureStatus:channels.summary(user),subscription:store.subscription(user), backupStatus: user.role === 'owner' ? store.backupStatus : null });}
+      if (route === '/api/bootstrap' && req.method === 'GET') {
+        if(analytics.isAdmin(user))return json(res,200,{user:publicUser(user),platformAdmin:true,csrf:user.csrf});
+        channels.drain(user.business_id);return json(res, 200, { user: publicUser(user), platformAdmin:false, csrf: user.csrf, business: store.business(user), records: store.records(user), users: store.users(user), activity: store.activity(user), captureStatus:channels.summary(user),subscription:store.subscription(user), backupStatus: user.role === 'owner' ? store.backupStatus : null });
+      }
+      if (route === '/api/logout' && req.method === 'POST') { store.logout(token); return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('') }); }
+      if (route === '/api/account/password' && req.method === 'POST') { const input = await body(req); store.changePassword(user, input.currentPassword, input.newPassword); return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('') }); }
+      // A platform administrator is an operator, never a tenant business user.
+      // Keep the boundary here so direct requests, PDFs and exports are covered
+      // by the same policy in Node and the Cloudflare Durable Object.
+      if(analytics.isAdmin(user))throw new AppError(403,'Platform administrators can monitor client activity but cannot access business workspaces.');
       if(route==='/api/integrations'&&req.method==='GET')return json(res,200,channels.list(user));
       if(route==='/api/integrations/website'&&req.method==='POST')return json(res,201,channels.website(user,await body(req,10000)));
       if(route==='/api/integrations/twilio'&&req.method==='POST')return json(res,201,await channels.twilio(user,await body(req,10000)));
@@ -156,8 +166,6 @@ function createApplication(options = {}) {
       if(route==='/api/billing/checkout'&&req.method==='POST')return json(res,200,await billing.checkout(user,await body(req)));
       if(route==='/api/billing/portal'&&req.method==='POST')return json(res,200,await billing.portal(user));
       if(route==='/api/billing/cancel-checkout'&&req.method==='POST')return json(res,200,await billing.cancelCheckout(user));
-      if (route === '/api/logout' && req.method === 'POST') { store.logout(token); return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('') }); }
-      if (route === '/api/account/password' && req.method === 'POST') { const input = await body(req); store.changePassword(user, input.currentPassword, input.newPassword); return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('') }); }
       if (route === '/api/settings' && req.method === 'PUT') { const input = await body(req); return json(res, 200, store.saveSettings(user, input.settings, input.revision)); }
       if (route === '/api/users' && req.method === 'POST') { const input = await body(req); analytics.reserveEmail(input.email); const added = store.addUser(user,input); measure(()=>analytics.registered(added)); return json(res,201,added); }
       if (/^\/api\/users\/[^/]+$/.test(route) && req.method === 'PUT') return json(res, 200, store.updateUser(user, route.split('/')[3], await body(req)));

@@ -43,3 +43,16 @@ test('signed-in visitors at login or signup continue to their workspace', async 
   await vm.runInContext('boot()', context);
   assert.equal(context.redirect, '/app');
 });
+test('admin navigation normalizes client routes and client users cannot enter admin views',()=>{
+  const context=client('/app','',()=>{});
+  context.document={getElementById:()=>({hidden:true})};
+  vm.runInContext("renderShell=()=>{};renderView=()=>{outcome=currentView;};showToast=message=>{outcome=message;};model.platformAdmin=true;model.business.currency='KES';",context);
+  for(const view of ['overview','customers','leads','quotes','invoices','reports','settings','billing','integrations']){
+    vm.runInContext('go('+JSON.stringify(view)+')',context);assert.equal(context.outcome,'admin');
+  }
+  for(const view of ['admin','admin-clients','admin-subscribers','admin-activity','admin-performance','admin-settings']){
+    vm.runInContext('go('+JSON.stringify(view)+')',context);assert.equal(context.outcome,view);
+  }
+  vm.runInContext('model.platformAdmin=false;go("admin-clients")',context);
+  assert.match(context.outcome,/administrator access is required/);
+});

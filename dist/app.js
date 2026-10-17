@@ -11,8 +11,12 @@ let model = { records: emptyRecords(), users: [], business: { name: 'BizAtrio', 
 let currentView = 'overview', demo = false, filters = { query: '', status: '', channel: '', from: '', to: '', archived: false, sort: 'updated' }, page = 1;
 let formContext = null, formDirty = false, inlineDirty = false, settingsRevision = null, openDraft = null, importContext = null, toastTimer;
 let usageTracker=null,usageUserId=null;
+const adminViews=['admin','admin-clients','admin-subscribers','admin-activity','admin-performance','admin-settings'];
+const clientViews=['overview','customers','leads','quotes','invoices','reports','settings','billing','integrations'];
+const adminMode=()=>!demo&&model.platformAdmin===true;
+const adminView=view=>adminViews.includes(view);
 function syncUsage(){
-  if(demo||!model.user){usageTracker?.stop();usageTracker=null;usageUserId=null;return;}
+  if(demo||!model.user||adminMode()){usageTracker?.stop();usageTracker=null;usageUserId=null;return;}
   if(usageUserId!==model.user.id){
     usageTracker?.stop();usageUserId=model.user.id;
     usageTracker=PulseUsage.create({tabId:crypto.randomUUID(),visible:()=>document.visibilityState==='visible'&&document.hasFocus(),send:(body,keepalive)=>fetch('/api/telemetry',{method:'POST',credentials:'same-origin',keepalive,headers:{'Content-Type':'application/json','X-CSRF-Token':model.csrf},body:JSON.stringify(body)})});
@@ -66,15 +70,15 @@ async function downloadServer(route, name) {
   const blob = await response.blob(), url = URL.createObjectURL(blob), a = document.createElement('a');
   a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
 }
-function ensureWritable() { if(demo)throw Error('This is a read-only demo. Sign in to create your own business records.');if(model.subscription&&!model.subscription.canWrite)throw Error('Your subscription needs attention. Open Billing to continue editing.'); }
+function ensureWritable() { if(adminMode())throw Error('Business records are available only in client workspaces.');if(demo)throw Error('This is a read-only demo. Sign in to create your own business records.');if(model.subscription&&!model.subscription.canWrite)throw Error('Your subscription needs attention. Open Billing to continue editing.'); }
 async function refresh(render = true,reloadAdmin=false) {
   if (demo) { if (render) renderView(); return; }
   const previousRevision = model.business.revision;
   const data = await api('/bootstrap');
-  model = data;
-  $('connectionText').textContent = 'Connected · changes saved on server';
-  if (render && !$('editor').open && !openDraft && !inlineDirty) { notice(''); renderShell(); if(currentView==='integrations'&&$('connectionsData')){if(reloadAdmin)Connections.reload();}else if(currentView!=='admin'||!$('adminData'))renderView();else if(reloadAdmin)PlatformAdmin.reload(); }
-  else if (previousRevision !== data.business.revision) notice('Workspace updates are available. Finish your current edit, then refresh.');
+  model = {records:emptyRecords(),users:[],activity:[],business:{name:'BizAtrio Administration',timezone:'UTC',currency:'USD',locale:'en-US'},...data};
+  $('connectionText').textContent = adminMode()?'Connected to platform administration':'Connected · changes saved on server';
+  if (render && !$('editor').open && !openDraft && !inlineDirty) { notice(''); renderShell(); if(['integrations','admin-settings'].includes(currentView)&&$('connectionsData')){if(reloadAdmin)Connections.reload();}else if(!adminView(currentView)||!$('adminData'))renderView();else if(reloadAdmin)PlatformAdmin.reload(); }
+  else if (previousRevision !== data.business?.revision) notice('Workspace updates are available. Finish your current edit, then refresh.');
 }
 async function savedRefresh(record, kind) {
   const index = model.records[kind].findIndex(r => r.id === record.id);
@@ -92,26 +96,35 @@ function heading(title, intro, action = '') { return '<div class="page-heading">
 function metric(label, value, note, primary = false, negative = false) { return '<div class="metric ' + (primary ? 'primary-metric ' : '') + (negative ? 'negative' : '') + '"><label>' + esc(label) + '</label><strong>' + esc(value) + '</strong><small>' + esc(note || '') + '</small></div>'; }
 function empty(title, description, action = '') { return '<div class="empty"><strong>' + title + '</strong><div>' + description + '</div>' + action + '</div>'; }
 function renderShell() {
-  if(currentView==='admin'&&(demo||!model.platformAdmin))currentView='overview';
+  const admin=adminMode();
+  const next=admin?(adminView(currentView)?currentView:'admin'):(adminView(currentView)?'overview':currentView);
+  if(next!==currentView){currentView=next;history.replaceState(null,'',location.pathname+location.search+'#'+next);}
   $('auth').hidden = true; $('workspace').hidden = false;
-  const adminButton=$('platformAdminNav');
-  if(!demo&&model.platformAdmin){if(!adminButton){const b=document.createElement('button');b.id='platformAdminNav';b.dataset.view='admin';b.innerHTML='<span>◉</span> Platform admin';b.onclick=()=>go('admin');$('navigation').append(b);}}
-  else adminButton?.remove();
-  $('businessLabel').textContent = model.business.name; $('workspaceName').textContent = model.business.name;
+  if(admin&&!$('platformAdminNav')){
+    for(const [i,[view,label,symbol]] of PlatformAdmin.navigation.entries()){const b=document.createElement('button');b.id=i===0?'platformAdminNav':'nav-'+view;b.dataset.view=view;b.dataset.adminNav='true';const mark=document.createElement('span');mark.textContent=symbol;b.append(mark,document.createTextNode(label));b.onclick=()=>go(view);$('navigation').append(b);}
+  }
+  document.querySelectorAll('#navigation [data-view]').forEach(el=>el.hidden=admin?!adminView(el.dataset.view):adminView(el.dataset.view));
+  $('businessLabel').textContent = admin?'Platform administration':model.business.name; $('workspaceName').textContent = admin?'Platform administration':model.business.name;
+  $('workspaceEdition').textContent=admin?'ADMIN':'WORKSPACE';$('workspaceEyebrow').textContent=admin?'PLATFORM OPERATIONS':'YOUR BUSINESS, CONNECTED';
+  $('sidebarDescription').textContent=admin?'Clients, subscriptions and platform activity.':'Every enquiry. Every quote. A clearer picture of your business.';
+  $('footerDescription').textContent=admin?'Client activity and application performance':'Amounts show their currency · Estimates and collected payments are shown separately';
+  $('dialogEyebrow').textContent=admin?'PLATFORM ADMINISTRATION':'YOUR WORKSPACE';document.title=admin?'BizAtrio · Platform administration':'BizAtrio · Business workspace';
   $('accountButton').textContent = (model.user?.name || 'Demo').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
-  $('accountButton').title = (model.user?.name || 'Demo') + ' · ' + (model.user?.role || 'Read only');
-  document.querySelectorAll('.owner-only').forEach(el => el.hidden = demo || model.user?.role !== 'owner');
+  $('accountButton').title = (model.user?.name || 'Demo') + ' · ' + (admin?'Platform administrator':model.user?.role || 'Read only');
+  document.querySelectorAll('.owner-only').forEach(el => el.hidden = admin || demo || model.user?.role !== 'owner');
   document.querySelectorAll('[data-view]').forEach(el => { const selected = el.dataset.view === currentView; el.classList.toggle('active', selected); if (selected) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current'); });
-  $('dueCount').textContent = active('leads').filter(l => Pulse.priority(l,Date.now(),model.business.responseHours).overdue).length || '';
+  $('dueCount').textContent = admin?'':active('leads').filter(l => Pulse.priority(l,Date.now(),model.business.responseHours).overdue).length || '';
   $('demoBanner').hidden = !demo;
   $('logoutButton').hidden = demo; $('exitDemo').textContent = signedInModel ? 'Return to your workspace' : needsSetup ? 'Set up your business' : 'Return to sign in';
-  const sub=model.subscription; $('subscriptionBanner').hidden=demo||!sub||sub.status==='active';$('subscriptionMessage').textContent=sub?(sub.canWrite?sub.planName+' trial · '+sub.daysRemaining+' days remaining.': 'Subscription needs attention · Your records remain available to view and export.'):'';
+  const sub=model.subscription; $('subscriptionBanner').hidden=admin||demo||!sub||sub.status==='active';$('subscriptionMessage').textContent=sub?(sub.canWrite?sub.planName+' trial · '+sub.daysRemaining+' days remaining.': 'Subscription needs attention · Your records remain available to view and export.'):'';
   if (demo) $('connectionText').textContent = 'Read-only demo · synthetic records';
-  try { $('legacyNotice').hidden = demo || model.user?.role !== 'owner' || !localStorage.getItem('profitpulse'); } catch { $('legacyNotice').hidden = true; }
+  try { $('legacyNotice').hidden = admin || demo || model.user?.role !== 'owner' || !localStorage.getItem('profitpulse'); } catch { $('legacyNotice').hidden = true; }
   syncUsage();
 }
 function go(view) {
-  if(view==='admin'&&(demo||!model.platformAdmin)){showToast('Platform administrator access is required.');return;}
+  if(![...clientViews,...adminViews].includes(view))return;
+  if(adminMode()&&!adminView(view))view='admin';
+  if(adminView(view)&&!adminMode()){showToast('Platform administrator access is required.');return;}
   if (inlineDirty && !confirm('Leave this page and discard the unsaved settings or account form?')) { location.hash = currentView; return; }
   if (openDraft && !confirm('Leave this reply? Save or download it first if you need to keep unsaved changes.')) { location.hash = currentView; return; }
   currentView = view; filters = {query:'',status:'',channel:'',from:'',to:'',archived:false,sort:'updated',currency:model.business.currency || 'USD'}; page = 1; openDraft = null; inlineDirty = false; $('replyComposer').hidden = true;
@@ -222,12 +235,13 @@ function renderReports() {
     '<section class="card"><h2>Invoice detail</h2>' + (r.invoices.length ? invoiceTable(paginate(r.invoices))+pagination(r.invoices.length) : empty('No matching invoices.','Adjust the period or create your first invoice.')) + '</section><div class="report-definitions"><strong>How these numbers work.</strong> Monetary totals and quote acceptance use the selected currency. Exchange conversion is not applied.  Payment totals use payment dates and include tax; refunds subtract from receipts. Invoice sales and balances use invoice issue dates. Estimated profit excludes tax and uses entered costs plus expected fees. Actual profit excludes tax and appears only for completed orders with finalized costs; it uses recorded costs and actual payment fees. It is an order margin, not a cash balance. Quote acceptance uses recorded decisions. Archived quotes and invoices retain their financial history. Cancelled invoices are excluded from sales; archived payment and cost entries are excluded from calculations.</div>';
 }
 function renderView() {
-  const renderer = currentView === 'integrations' ? Connections.render : currentView === 'admin' ? PlatformAdmin.render : currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
+  if(adminMode()&&!adminView(currentView))currentView='admin';
+  const renderer = currentView === 'admin-settings'?Connections.renderPlatform:currentView === 'integrations' ? Connections.render : adminView(currentView) ? PlatformAdmin.render : currentView === 'overview' ? overview : currentView === 'reports' ? renderReports : currentView === 'settings' ? renderSettings : currentView === 'billing' ? renderBilling : () => renderList(currentView);
   $('content').innerHTML = renderer();
   bindToolbar();
   if(currentView==='billing'&&!demo&&model.user?.role==='owner')loadBilling();
   if(currentView==='settings'&&!demo&&model.user?.role==='owner')loadSafetyCopies();
-  if(currentView==='admin')PlatformAdmin.mount();if(currentView==='integrations')Connections.mount();
+  if(adminView(currentView)&&currentView!=='admin-settings')PlatformAdmin.mount();if(['integrations','admin-settings'].includes(currentView))Connections.mount();
   try{if(localStorage.getItem('profitpulse.migrated.'+model.business.id))$('legacyNotice').hidden=true;}catch{}
   if (demo) document.querySelectorAll('[data-action="new"],[data-action="edit"],[data-action="archive"],[data-action="restoreRecord"],[data-action="quoteFromLead"],[data-action="invoiceFromQuote"],[data-action="invoiceFromCustomer"],[data-action="draft"],[data-action="pdf"],[data-action="csv"]').forEach(b => b.disabled = true);
 }
@@ -519,8 +533,8 @@ function exportReport(){
 let needsSetup=false,signedInModel=null;
 function showAuth(setup,errorMessage=''){
   usageTracker?.stop();usageTracker=null;usageUserId=null;PlatformAdmin.clear();Connections.clear();
-  $('platformAdminNav')?.remove();
-  if(['admin','integrations'].includes(currentView)){$('editor').close();$('dialogBody').replaceChildren();$('content').replaceChildren();currentView='overview';}
+  document.querySelectorAll('[data-admin-nav]').forEach(el=>el.remove());
+  if(adminView(currentView)||currentView==='integrations'){$('editor').close();$('dialogBody').replaceChildren();$('content').replaceChildren();currentView='overview';}
   inlineDirty=false;formDirty=false;openDraft=null;$('replyComposer').hidden=true;
   needsSetup=setup;$('workspace').hidden=true;$('auth').hidden=false;
   $('auth').innerHTML='<section class="auth-story"><div class="brand"><span class="brand-mark">◈</span> BizAtrio</div><h1>Small decisions.<br>Stronger business.</h1><p>From the first enquiry to the final payment. Keep your customers close and your numbers clear.</p><div class="story-foot">CUSTOMERS · QUOTATIONS · PAYMENTS · PROFIT</div></section><section class="auth-panel"><span class="eyebrow">YOUR BUSINESS WORKSPACE</span><h2>'+(setup?'Let’s set up your business.':'Welcome back.')+'</h2><p>'+(setup?'Start your 14-day trial. No card required to create your workspace.':'Sign in to pick up where your business left off.')+'</p><form id="authForm"><div id="authError" class="error" role="alert"'+(errorMessage?'':' hidden')+'>'+esc(errorMessage)+'</div>'+(setup?field('businessName','Business name','','text','required maxlength="500"')+field('name','Your name','','text','required maxlength="100"')+select('currency','Default business currency','USD',currencyOptions(),true)+select('plan','Trial plan',new URLSearchParams(location.search).get('plan') || 'starter',['starter','growth','business'],true)+field('locale','Number & date locale',navigator.language || 'en-US','text','required maxlength="50"')+field('timezone','Business timezone',Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC','text','required maxlength="100"'):'')+field('email','Email address','','email','required autocomplete="username" maxlength="254"')+field('password',setup?'Create a BizAtrio password':'BizAtrio password','','password','required '+(setup?'minlength="12" autocomplete="new-password"':'autocomplete="current-password"')+' maxlength="256"')+(setup?'':'<p class="small">Use the password created for your BizAtrio account. Google sign-in is not enabled.</p>')+'<button class="primary" type="submit">'+(setup?'Create business workspace':'Sign in')+'</button></form><button id="demoButton" class="demo-button">Explore the demo workspace →</button><p class="small">'+(setup?'Already have an account? <a href="/login">Sign in</a>. <a href="/">Back to home</a>.':'New here? <a href="/signup">Create your business workspace</a>. Team members sign in with the account their owner provides.')+'</p></section>';
@@ -552,6 +566,7 @@ document.addEventListener('click',async event=>{
   const target=event.target.closest('button[data-action]');if(!target||target.disabled)return;
   const {action,id,kind}=target.dataset;target.disabled=true;
   try{
+    if(adminMode()&&!['go','cancelForm'].includes(action))throw Error('Business operations are available only in client workspaces.');
     if(action==='go')go(kind);
     else if(action==='new')openForm(kind);
     else if(action==='edit')openForm(kind,model.records[kind].find(r=>r.id===id));
@@ -596,16 +611,16 @@ $('editor').addEventListener('cancel',event=>{event.preventDefault();closeDialog
 $('syncButton').onclick=()=>{if(openDraft||inlineDirty){showToast('Save or close your current edit before refreshing.');return;}refresh(true,true).catch(handleError);};
 $('exportButton').onclick=()=>downloadServer('/backup','bizatrio-backup-'+today()+'.json').catch(handleError);
 $('logoutButton').onclick=()=>signOut().catch(handleError);
-$('accountButton').onclick=()=>go('settings');
+$('accountButton').onclick=()=>go(adminMode()?'admin-settings':'settings');
 $('exitDemo').onclick=()=>exitDemo().catch(handleError);
 $('legacyImportButton').onclick=()=>{try{previewImport(null,localStorage.getItem('profitpulse')).catch(handleError);}catch(error){handleError(error);}};
 $('legacyExportButton').onclick=()=>{try{download(localStorage.getItem('profitpulse'),'bizatrio-original-browser-data.json');}catch(error){handleError(error);}};
 document.addEventListener('input',event=>{if(event.target.closest('#settingsForm,#teamForm,#passwordForm,#websiteConnection,#twilioConnection,#metaAppForm'))inlineDirty=true;});
-window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin','integrations'].includes(view)&&view!==currentView)go(view);});
+window.addEventListener('hashchange',()=>{const view=location.hash.slice(1);if([...clientViews,...adminViews].includes(view)&&view!==currentView)go(view);});
 window.addEventListener('beforeunload',event=>{if(formDirty||inlineDirty){event.preventDefault();event.returnValue='';}});
 setInterval(async()=>{
   if(demo||$('workspace').hidden)return;
-  try{await refresh(!$('editor').open&&!openDraft&&!inlineDirty);}catch(error){if(error.status===401&&currentView==='admin'){showAuth(false,'Your session expired. Sign in again.');return;}$('connectionText').textContent='Offline · edits are not synchronized';notice(error.status===401?'Your session expired. Download any unsaved reply and sign in again.':'Connection lost. Existing records remain on the server; save actions will report a failure until you reconnect.');}
+  try{await refresh(!$('editor').open&&!openDraft&&!inlineDirty);}catch(error){if(error.status===401&&adminView(currentView)){showAuth(false,'Your session expired. Sign in again.');return;}$('connectionText').textContent='Offline · edits are not synchronized';notice(error.status===401?'Your session expired. Download any unsaved reply and sign in again.':'Connection lost. Existing records remain on the server; save actions will report a failure until you reconnect.');}
   if(currentView==='leads'){for(const l of active('leads')){const p=Pulse.priority(l,Date.now(),model.business.responseHours);const tag=document.querySelector('[data-priority="'+CSS.escape(l.id)+'"]'),reasons=document.querySelector('[data-reasons="'+CSS.escape(l.id)+'"]');if(tag)tag.innerHTML=p.high?pill('Needs attention','high'):'';if(reasons)reasons.textContent=p.reasons.join(' · ');}}
 },30000);
 for(const event of ['pointerdown','pointermove','keydown','wheel','touchstart'])document.addEventListener(event,()=>usageTracker?.activity(),{passive:true});
@@ -614,7 +629,7 @@ window.addEventListener('pagehide',()=>usageTracker?.flush(true));
 window.addEventListener('blur',()=>usageTracker?.flush(true));
 setInterval(()=>usageTracker?.sample(),1000);
 async function boot(){
-  const requested=location.hash.slice(1);if(['overview','customers','leads','quotes','invoices','reports','settings','billing','admin','integrations'].includes(requested))currentView=requested;
+  const requested=location.hash.slice(1);if([...clientViews,...adminViews].includes(requested))currentView=requested;
   needsSetup=location.pathname==='/signup';
   if(new URLSearchParams(location.search).get('demo')==='1'){startDemo();return;}
   try{
