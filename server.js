@@ -8,9 +8,10 @@ const { Billing } = require('./lib/billing');
 const { documentPdf } = require('./lib/pdf');
 const { Analytics } = require('./lib/analytics');
 const { AdminSetup } = require('./lib/admin-setup');
+const { PasswordReset } = require('./lib/password-reset');
 const { Channels, formHeaders, oauthResult } = require('./lib/channels');
 const LIMIT = 50 * 1024 * 1024;
-const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/admin/setup':'admin-setup.html', '/admin-setup.js':'admin-setup.js', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/connections.js':'connections.js', '/capture.js':'capture.js', '/enquire':'enquire.html', '/enquire.js':'enquire.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
+const STATIC_FILES = { '/': 'landing.html', '/index.html': 'landing.html', '/landing.css':'landing.css', '/landing.js':'landing.js', '/app':'index.html', '/signup':'index.html', '/login':'index.html', '/forgot-password':'password-reset.html', '/reset-password':'password-reset.html', '/password-reset.js':'password-reset.js', '/admin/setup':'admin-setup.html', '/admin-setup.js':'admin-setup.js', '/app.js': 'app.js', '/admin.js':'admin.js', '/usage.js':'usage.js', '/connections.js':'connections.js', '/capture.js':'capture.js', '/enquire':'enquire.html', '/enquire.js':'enquire.js', '/logic.js': 'logic.js', '/style.css': 'style.css', '/favicon.svg': 'favicon.svg' };
 
 function createApplication(options = {}) {
   const backupLimit = options.backupLimit || LIMIT;
@@ -21,6 +22,7 @@ function createApplication(options = {}) {
   const analytics = new Analytics(store, { adminEmails: options.adminEmails ?? process.env.PLATFORM_ADMIN_EMAILS, adminEmailHashes:options.adminEmailHashes ?? process.env.PLATFORM_ADMIN_EMAIL_SHA256, now: options.analyticsNow });
   const adminSetup=new AdminSetup(store,analytics,options.adminSetup||{tokenHash:process.env.PLATFORM_ADMIN_SETUP_TOKEN_SHA256,emailHash:process.env.PLATFORM_ADMIN_SETUP_EMAIL_SHA256,expiresAt:process.env.PLATFORM_ADMIN_SETUP_EXPIRES_AT,mode:process.env.PLATFORM_ADMIN_SETUP_MODE},options.analyticsNow);
   const channels=new Channels(store,analytics,{...options.channels,publicOrigin,meta:options.channels?.meta||{appId:process.env.META_APP_ID,appSecret:process.env.META_APP_SECRET,version:process.env.META_API_VERSION}});
+  const passwordReset=new PasswordReset(store,analytics,{...options.passwordReset,codec:channels,publicOrigin,config:options.passwordReset?.config||{apiKey:process.env.RESEND_API_KEY,fromAddress:process.env.PASSWORD_RESET_FROM}});
   const measure = callback => { try { return callback(); } catch (error) { logger.error('Analytics measurement failed:', error.message); } };
   if(publicOrigin){const parsed=new URL(publicOrigin);if(parsed.origin!==publicOrigin||!['https:','http:'].includes(parsed.protocol))throw Error('PUBLIC_ORIGIN must be an exact HTTP(S) origin without a path or trailing slash.');}
   if (production && (!publicOrigin || !publicOrigin.startsWith('https://'))) throw Error('Set PUBLIC_ORIGIN to the HTTPS address of this deployment.');
@@ -73,7 +75,8 @@ function createApplication(options = {}) {
         const file = files[route], type = file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html';
         const bytes = req.method === 'HEAD' ? '' : fs.readFileSync(path.join(__dirname, 'dist', file));
         const pageHeaders=route==='/enquire'?formHeaders(securityHeaders,[channels.siteInfo(url.searchParams.get('site')).websiteOrigin]):securityHeaders;
-        res.writeHead(200, { ...pageHeaders, 'Content-Type': type + '; charset=utf-8', 'Cache-Control':route==='/enquire'?'no-store':'no-cache' });
+        const recoveryPage=['/forgot-password','/reset-password'].includes(route);
+        res.writeHead(200, { ...pageHeaders, ...(recoveryPage?{'Referrer-Policy':'no-referrer'}:{}), 'Content-Type': type + '; charset=utf-8', 'Cache-Control':route==='/enquire'||recoveryPage?'no-store':'no-cache' });
         return res.end(bytes);
       }
       if(route==='/api/channel-webhooks/meta'&&req.method==='GET'){const challenge=channels.verifyMeta(Object.fromEntries(url.searchParams));res.writeHead(200,{...securityHeaders,'Content-Type':'text/plain','Cache-Control':'no-store'});return res.end(challenge);}
@@ -101,6 +104,10 @@ function createApplication(options = {}) {
         try{return json(res,200,await billing.webhook(Buffer.concat(chunks),req.headers['stripe-signature']));}catch(error){if(!error.status)throw new AppError(503,'Billing synchronization is temporarily unavailable.');throw error;}
       }
       if (!['GET', 'HEAD'].includes(req.method)) guardOrigin(req);
+      if(route==='/api/password/status'&&req.method==='GET')return json(res,200,{available:passwordReset.ready()});
+      if(route==='/api/password/forgot'&&req.method==='POST')return json(res,202,passwordReset.request(await body(req,4000),req.socket.remoteAddress));
+      if(route==='/api/password/validate'&&req.method==='POST')return json(res,200,passwordReset.validate(await body(req,4000),req.socket.remoteAddress));
+      if(route==='/api/password/reset'&&req.method==='POST')return json(res,200,passwordReset.reset(await body(req,4000),req.socket.remoteAddress),{'Set-Cookie':cookie('')});
       if(route==='/api/admin-setup/status'&&req.method==='GET')return json(res,200,{available:!!adminSetup.available(),recovery:adminSetup.recoveryEnabled()});
       if(route==='/api/admin-setup'&&req.method==='POST'){
         const key='admin-setup:'+String(adminSetup.config.tokenHash||'disabled')+':'+req.socket.remoteAddress;
@@ -132,6 +139,9 @@ function createApplication(options = {}) {
       measuredUser = user;
       if (route.startsWith('/api/admin/')) {
         analytics.requireAdmin(user);
+        if(route==='/api/admin/email-settings'&&req.method==='GET')return json(res,200,passwordReset.settings(user));
+        if(route==='/api/admin/email-settings'&&req.method==='PUT')return json(res,200,passwordReset.saveSettings(user,await body(req,4000)));
+        if(route==='/api/admin/email-settings/test'&&req.method==='POST')return json(res,200,await passwordReset.testEmail(user));
         if(route==='/api/admin/channel-settings'&&req.method==='GET')return json(res,200,channels.adminConfig(user));
         if(route==='/api/admin/channel-settings'&&req.method==='PUT')return json(res,200,channels.saveAdminConfig(user,await body(req,10000)));
         if (route === '/api/admin/dashboard' && req.method === 'GET') return json(res,200,analytics.dashboard(user,url.searchParams.get('days')));
@@ -219,7 +229,7 @@ function createApplication(options = {}) {
   const server = http.createServer(handleRequest);
   let timer;
   if (options.startTimers !== false) { store.automaticBackup(); timer = setInterval(() => store.automaticBackup(), 60 * 60000); timer.unref(); }
-  return { server, store, billing, analytics, adminSetup, channels,handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve));await Promise.allSettled([...channels.tasks]);while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
+  return { server, store, billing, analytics, adminSetup, channels,passwordReset,handleRequest, close: async () => { clearInterval(timer); await new Promise(resolve => server.close(resolve));await Promise.allSettled([...channels.tasks,...passwordReset.tasks]);while (store.backupRunning) await new Promise(resolve => setTimeout(resolve, 10)); store.close(); } };
 }
 if (require.main === module) {
   const app = createApplication();

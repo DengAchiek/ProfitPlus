@@ -35,7 +35,7 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     email: suffix + '@example.test', password: 'synthetic-worker-password', currency: 'KES', timezone: 'Africa/Nairobi' });
   let owner, other, staff, customer, quote, direct, converted;
   await t.test('root is public and application routes load without static redirects', async () => {
-    for (const route of ['/', '/index.html', '/login', '/signup', '/app', '/landing.css', '/app.js']) {
+    for (const route of ['/', '/index.html', '/login', '/signup', '/app', '/forgot-password', '/reset-password', '/password-reset.js', '/landing.css', '/app.js']) {
       const response = await request(route);
       assert.equal(response.status, 200, route); assert.equal(response.headers.get('location'), null);
     }
@@ -45,6 +45,9 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.deepEqual(await (await request('/api/status')).json(), { needsSetup: true });
     assert.equal((await (await request('/api/plans')).json()).plans.length, 3);
     assert.equal((await request('/missing')).status, 404);
+    assert.deepEqual(await(await request('/api/password/status')).json(),{available:false});
+    assert.equal((await request('/api/password/forgot','POST',{email:'unknown@example.test'})).status,503);
+    const recoveryPage=await request('/reset-password');assert.equal(recoveryPage.headers.get('cache-control'),'no-store');assert.equal(recoveryPage.headers.get('referrer-policy'),'no-referrer');
   });
   await t.test('signup and login create independent persistent sessions', async () => {
     owner = await session(await request('/api/register', 'POST', account('owner')));
@@ -205,6 +208,15 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.deepEqual(await(await request('/api/admin-setup/status')).json(),{available:false,recovery:true});
     assert.equal((await request('/api/admin-setup','POST',{...input,setupCode:recoveryCode})).status,403);
     assert.equal((await request('/api/admin/dashboard','GET',null,recoveredSession)).status,200);
+    assert.equal((await request('/api/admin/email-settings','GET',null,owner)).status,403);
+    const emailSettings=await request('/api/admin/email-settings','PUT',{apiKey:'re_synthetic_worker_key_12345',fromAddress:'accounts@example.test'},recoveredSession);
+    assert.equal(emailSettings.status,200,await emailSettings.clone().text());assert.equal((await emailSettings.json()).ready,true);
+    assert.deepEqual(await(await request('/api/password/status')).json(),{available:true});
+    const unknown=await request('/api/password/forgot','POST',{email:'not-a-registered-user@example.test'});assert.equal(unknown.status,202);assert.doesNotMatch(await unknown.text(),/token|key|not-a-registered-user/);
+    assert.equal((await request('/api/password/validate','POST',{token:'a'.repeat(64)})).status,400);
+    assert.equal((await request('/api/password/reset','POST',{token:'a'.repeat(64),newPassword:'synthetic-new-password',confirmPassword:'synthetic-new-password'}, {}, {Origin:'https://attacker.example'})).status,403);
+    await worker.stop();worker=await start(recoveryVars);
+    const persisted=await(await request('/api/admin/email-settings','GET',null,recoveredSession)).json();assert.equal(persisted.ready,true);assert.equal(persisted.fromAddress,'accounts@example.test');assert.doesNotMatch(JSON.stringify(persisted),/re_synthetic|token/);
   });
   await t.test('connected website intake, framing policy, tenant isolation and duplicate ledger survive a Worker restart',async()=>{
     const connected=await request('/api/integrations/website','POST',{websiteOrigin:'https://worker-client.example.test',label:'Worker website',visitsEnabled:true},owner);

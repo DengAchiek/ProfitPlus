@@ -33,6 +33,7 @@ export class ProfitPulseDatabase extends DurableObject {
       adminEmailHashes: env.PLATFORM_ADMIN_EMAIL_SHA256 || '',
       adminSetup:{tokenHash:env.PLATFORM_ADMIN_SETUP_TOKEN_SHA256,emailHash:env.PLATFORM_ADMIN_SETUP_EMAIL_SHA256,expiresAt:env.PLATFORM_ADMIN_SETUP_EXPIRES_AT,mode:env.PLATFORM_ADMIN_SETUP_MODE},
       channels:{meta:{appId:env.META_APP_ID,appSecret:env.META_APP_SECRET,version:env.META_API_VERSION},background:task=>ctx.waitUntil(task)},
+      passwordReset:{config:{apiKey:env.RESEND_API_KEY,fromAddress:env.PASSWORD_RESET_FROM},background:task=>ctx.waitUntil(task)},
       pdfFonts: { regular: Buffer.from(regularFont), bold: Buffer.from(boldFont) },
       billing: {
         stripe: env.STRIPE_SECRET_KEY ? new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient(), maxNetworkRetries: 2, timeout: 20000 }) : null,
@@ -67,6 +68,9 @@ export default {
     const headers = new Headers(asset.headers);
     for (const [name, value] of Object.entries(securityHeaders)) headers.set(name, value);
     headers.set('Cache-Control', 'no-cache');
+    if(['/forgot-password','/reset-password'].includes(url.pathname)){
+      headers.set('Cache-Control','no-store');headers.set('Referrer-Policy','no-referrer');
+    }
     if(url.pathname==='/enquire'){
       if(!env.DATABASE)return errorResponse(503,'The enquiry form is unavailable.');
       const infoURL=new URL('/api/capture/'+encodeURIComponent(url.searchParams.get('site')||'missing')+'/info',url.origin);
