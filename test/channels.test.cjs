@@ -18,6 +18,22 @@ const site=f=>f.channels.website(f.user,{websiteOrigin:'https://client.example.t
 const input=(f,id,extra={})=>({name:'Customer One',email:'customer@example.test',message:'Please quote for 50 brochures.',submissionId:'submission-one',nonce:f.channels.formNonce(id),...extra});
 const collect=(f,c,extra={})=>f.channels.websiteEnquiry(c.id,input(f,c.id,extra),f.channels.origin,'synthetic-ip');
 const json=data=>new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});
+test('signed call callbacks keep their original hostname after a primary-domain migration',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bizatrio-domain-callback-'));
+  const app=createApplication({dataDir:dir,startTimers:false,publicOrigin:'https://bizatrio.com'});
+  t.after(async()=>{await app.close();fs.rmSync(dir,{recursive:true,force:true});});
+  const user=app.store.createBusiness(account('migration@example.test'));
+  const accountSid='AC'+'1'.repeat(32),numberSid='PN'+'2'.repeat(32),authToken='3'.repeat(32),phone='+254700000001';
+  app.channels.fetch=async()=>json({account_sid:accountSid,sid:numberSid,phone_number:phone});
+  const connection=await app.channels.twilio(user,{accountSid,numberSid,authToken});
+  const callback='https://profitplus.cj5v2tzbtr.workers.dev/api/channel-webhooks/twilio/'+connection.id;
+  const params={AccountSid:accountSid,To:phone,From:'+254700000002',CallSid:'CA'+'4'.repeat(32),CallStatus:'completed',Direction:'inbound',CallDuration:'30'};
+  const {fetchResponse}=await import('../cloudflare/http.mjs');
+  const deliver=signature=>fetchResponse(app.handleRequest,new Request(callback,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signature},body:new URLSearchParams(params)}));
+  assert.equal((await deliver(getExpectedTwilioSignature(authToken,callback,params))).status,204);
+  assert.equal((await deliver(getExpectedTwilioSignature(authToken,callback.replace('https://profitplus.cj5v2tzbtr.workers.dev','https://bizatrio.com'),params))).status,403);
+  assert.equal(app.store.list(user,'leads').length,1);
+});
 function meta(f,provider='facebook',external='12345'){
   f.channels.saveAdminConfig(f.user,{appId:'12345678',appSecret:'synthetic-meta-secret',version:'v24.0'});
   const id=f.channels.reserve(f.user,provider,external,'Business inbox',{pageId:'12345'},{token:'synthetic-page-token'});f.channels.connected(id);return id;

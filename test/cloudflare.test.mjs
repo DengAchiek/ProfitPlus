@@ -12,7 +12,9 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
   const origin = 'http://127.0.0.1:8787';
   let adminEmails='';
   const start = (vars = {}) => unstable_dev('cloudflare/worker.mjs', {
-    config: 'wrangler.jsonc', ip: '127.0.0.1', port: 0, local: true,
+    // Preserve each synthetic request host instead of Wrangler rewriting it to
+    // the production custom domain declared in wrangler.jsonc.
+    config: 'wrangler.jsonc', routes: [], ip: '127.0.0.1', port: 0, local: true,
     persist: true, persistTo: dir, logLevel: 'error',
     vars: { PUBLIC_ORIGIN: origin, PLATFORM_ADMIN_EMAILS:'', PLATFORM_ADMIN_EMAIL_SHA256:adminEmails?createHash('sha256').update(adminEmails).digest('hex'):'', PLATFORM_ADMIN_SETUP_TOKEN_SHA256:'',PLATFORM_ADMIN_SETUP_EMAIL_SHA256:'',PLATFORM_ADMIN_SETUP_EXPIRES_AT:'',PLATFORM_ADMIN_SETUP_MODE:'create', ...vars },
     experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false },
@@ -234,5 +236,27 @@ test('Cloudflare runtime: public routing, sessions, tenant and team access, PDFs
     assert.equal((await request('/api/capture/'+connection.id+'/enquiry','POST',input)).status,202);
     boot=await(await request('/api/bootstrap','GET',null,owner)).json();assert.equal(boot.records.leads.filter(l=>l.captured?.eventId===input.submissionId).length,1);
     const connections=await(await request('/api/integrations','GET',null,owner)).json();assert.equal(connections.websiteVisits[0].views,1);assert.equal(connections.connections[0].status,'connected');
+  });
+  await t.test('custom-domain migration redirects old pages, preserves accounts and enforces the new origin',async()=>{
+    const primary='https://bizatrio.com',legacy='https://profitplus.cj5v2tzbtr.workers.dev';
+    await worker.stop();worker=await start({PUBLIC_ORIGIN:primary,CANONICAL_REDIRECT_HOSTS:new URL(legacy).hostname});
+    for(const route of ['/','/login','/signup?plan=growth','/app?demo=1','/reset-password','//untrusted.example/path?next=https%3A%2F%2Funtrusted.example']){
+      for(const method of ['GET','HEAD']){
+        const response=await worker.fetch(legacy+route,{method,redirect:'manual'});
+        const target=new URL(primary);target.pathname=new URL(legacy+route).pathname;target.search=new URL(legacy+route).search;
+        assert.equal(response.status,308,route);assert.equal(response.headers.get('location'),target.href);assert.equal(response.headers.get('cache-control'),'no-store');
+      }
+    }
+    assert.equal((await worker.fetch(primary+'/login',{redirect:'manual'})).status,200);
+    const status=await worker.fetch(legacy+'/api/password/status',{redirect:'manual'});assert.equal(status.status,200);assert.equal(status.headers.get('location'),null);
+    const boot=await(await worker.fetch(primary+'/api/bootstrap',{headers:{Cookie:owner.cookie}})).json();assert.equal(boot.user.id,owner.user.id);assert.ok(boot.records.customers.some(c=>c.id===customer.id));
+    for(const [requestOrigin,expected] of [[primary,400],[legacy,403],['https://untrusted.example',403]]){
+      // Keep the proxy target local so Wrangler does not rewrite the Origin
+      // header under test to its development server's address.
+      const response=await worker.fetch(origin+'/api/password/validate',{method:'POST',headers:{Origin:requestOrigin,'Content-Type':'application/json'},body:JSON.stringify({token:'a'.repeat(64)})});
+      assert.equal(response.status,expected);
+    }
+    const callback=await worker.fetch(legacy+'/api/channel-webhooks/twilio/missing',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'CallStatus=completed',redirect:'manual'});
+    assert.equal(callback.status,403);assert.equal(callback.headers.get('location'),null);
   });
 });

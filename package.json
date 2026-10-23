@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev:cloudflare": "wrangler dev --ip 127.0.0.1 --port 8787 --var PUBLIC_ORIGIN:http://127.0.0.1:8787",
+    "dev:cloudflare": "wrangler dev --ip 127.0.0.1 --port 8787 --host 127.0.0.1 --upstream-protocol http --var PUBLIC_ORIGIN:http://127.0.0.1:8787",
     "build": "wrangler deploy --dry-run --outdir cloudflare-build",
     "deploy": "wrangler deploy",
     "test": "node --test test/*.test.cjs",

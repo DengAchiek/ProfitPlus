@@ -48,6 +48,16 @@ export class ProfitPulseDatabase extends DurableObject {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // Move browser pages to the primary domain before rendering a sign-in form.
+    // API callbacks and uploads keep their original URL and method.
+    const redirectHosts = String(env.CANONICAL_REDIRECT_HOSTS || '').split(',').map(host => host.trim()).filter(Boolean);
+    if (env.PUBLIC_ORIGIN && redirectHosts.includes(url.hostname) && ['GET', 'HEAD'].includes(request.method) && !url.pathname.startsWith('/api/')) {
+      const canonical = new URL(env.PUBLIC_ORIGIN);
+      if (url.origin !== canonical.origin) {
+        canonical.pathname = url.pathname; canonical.search = url.search;
+        return new Response(null, { status: 308, headers: { ...securityHeaders, Location: canonical.href, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+      }
+    }
     if (url.pathname.startsWith('/api/')) {
       if (!env.DATABASE || !env.PUBLIC_ORIGIN) return errorResponse(503, 'The workspace service is not configured. Please contact the service operator.');
       try {

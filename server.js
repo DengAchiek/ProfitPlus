@@ -85,7 +85,7 @@ function createApplication(options = {}) {
       if(callWebhook&&req.method==='POST'){
         if(!String(req.headers['content-type']||'').startsWith('application/x-www-form-urlencoded'))throw new AppError(415,'Use a form-encoded call callback.');
         const params={};for(const [key,value]of new URLSearchParams((await rawBody(req,64000)).toString('utf8')))params[key]=params[key]===undefined?value:Array.isArray(params[key])?[...params[key],value]:[params[key],value];
-        const exactURL=String(req.url).startsWith(channels.origin+'/')?req.url:channels.origin+req.url;
+        const exactURL=new URL(req.url,channels.origin).href;
         channels.twilioWebhook(callWebhook[1],params,req.headers['x-twilio-signature'],exactURL);res.writeHead(204,securityHeaders);return res.end();
       }
       const intake=route.match(/^\/api\/capture\/([\w-]+)\/(info|visit|enquiry)$/);

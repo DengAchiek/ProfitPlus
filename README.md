@@ -19,11 +19,13 @@ For the Node deployment, the application needs **npm start** for authentication,
 
 ## Cloudflare Workers deployment from GitHub
 
-The repository includes `wrangler.jsonc` and `cloudflare/worker.mjs` for **profitplus.cj5v2tzbtr.workers.dev**. The Worker serves the public landing page at `/`, the signup form at `/signup`, sign-in at `/login`, and the workspace at `/app`. It runs the shared server routes and business rules against persistent, SQLite-backed Durable Object storage. The database binding and initial migration are declared in Wrangler; no D1 database ID or external Node server is required.
+The repository includes `wrangler.jsonc` and `cloudflare/worker.mjs` for **https://bizatrio.com**. The custom domain is declared in Wrangler on the existing `profitplus` Worker. The Worker serves the public landing page at `/`, the signup form at `/signup`, sign-in at `/login`, and the workspace at `/app`. It runs the shared server routes and business rules against persistent, SQLite-backed Durable Object storage. The database binding and initial migration are declared in Wrangler; no D1 database ID or external Node server is required.
 
 In the existing Cloudflare Worker’s **Settings → Builds**, connect this GitHub repository and production branch `main`, use the repository root, set the build command to `npm run build` and the deploy command to `npm run deploy`. Set build variable `NODE_VERSION=24`. The deployment must use the repository’s Wrangler configuration, including its `main`, asset binding, and database migration. A static-only deployment of `dist/` will show the login document at the root and return 404 for `/api/*`.
 
-`PUBLIC_ORIGIN` is set to the existing HTTPS address in `wrangler.jsonc`. Update it if the primary domain changes. Add Stripe keys and price mappings as Cloudflare runtime secrets/variables only when billing is configured; trials and account access work without them. This deployment creates its own persistent database. It does not upload the private local `data/` directory. Existing local workspace records can be migrated using an owner export and restore after creating the corresponding cloud workspace; local account passwords and sessions are not copied.
+`PUBLIC_ORIGIN` is `https://bizatrio.com`, so origin checks, password recovery links, checkout URLs and new integration callbacks use the custom domain. `CANONICAL_REDIRECT_HOSTS` lists the old `profitplus.cj5v2tzbtr.workers.dev` hostname; browser GET/HEAD page requests there redirect permanently to the same path and query on bizatrio.com. API requests are not redirected, preserving callback methods, bodies and signatures. Twilio validates the original absolute callback URL even when the primary origin has changed. Cookies remain host-only: existing users sign in again on the custom domain with their existing BizAtrio password. Account identities and business records use the same Durable Object database. Update external providers' saved callback and return URLs to the addresses shown in Platform settings or Connections when configuring those providers.
+
+Add Stripe keys and price mappings as Cloudflare runtime secrets/variables only when billing is configured; trials and account access work without them. This deployment does not upload the private local `data/` directory. Existing local workspace records can be migrated using an owner export and restore after creating the corresponding cloud workspace; local account passwords and sessions are not copied.
 
 For local Worker development and verification:
 
@@ -42,7 +44,7 @@ Cloudflare uses persistent storage and provider-managed database recovery rather
 
 ## Application name and deployment identity
 
-The public application name is **BizAtrio**. The existing Cloudflare Worker name, URL, Durable Object class/name, SQLite filename, browser recovery keys and website capture protocol identifiers are retained for compatibility with existing accounts, records, reply drafts and installed forms. Export filenames use `bizatrio-`; historical backup formats remain supported. Domain registration and any custom-domain connection are separate from this branding change.
+The public application name is **BizAtrio**, hosted at **https://bizatrio.com**. The existing Cloudflare Worker name, legacy URL, Durable Object class/name, SQLite filename, browser recovery keys and website capture protocol identifiers are retained for compatibility with existing accounts, records, reply drafts and installed forms. Export filenames use `bizatrio-`; historical backup formats remain supported.
 
 ## Implemented functionality
 
